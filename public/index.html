@@ -15,8 +15,30 @@ window.addEventListener('error', function(e){
 </script>
 <style>
 *{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,"Hiragino Sans","Yu Gothic",Meiryo,sans-serif;background:#f4f5f7;color:#1f2937;font-size:15px}
-header{background:#1f3a5f;color:#fff;padding:10px 14px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5}
+:root{--c:#1f3a5f;--cd:#16304f;--cl:#e8edf4;--bg:#f4f5f7}
+body[data-sec=memos]{--c:#e07b00;--cd:#a85a00;--cl:#fdeedb;--bg:#fff8f0}
+body[data-sec=home]{--c:#1f6feb;--cd:#154aa3;--cl:#e3eeff;--bg:#f2f7ff}
+body[data-sec=sales]{--c:#1a9b6c;--cd:#116b49;--cl:#dcf5ea;--bg:#f1faf6}
+body[data-sec=master]{--c:#7a4fc2;--cd:#573691;--cl:#eee6fa;--bg:#f8f5fd}
+body{margin:0;font-family:-apple-system,"Hiragino Sans","Yu Gothic",Meiryo,sans-serif;background:var(--bg);transition:background .2s;color:#1f2937;font-size:15px}
+#top{position:sticky;top:0;z-index:5}
+header{background:var(--c);transition:background .2s;color:#fff;padding:10px 14px;display:flex;align-items:center;gap:10px}
+nav#tb{background:var(--cd);display:flex;gap:6px;padding:6px 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+nav#tb .tg{display:flex;flex:none;border-radius:8px;background:rgba(255,255,255,.14);overflow:hidden;box-shadow:inset 0 -3px 0 var(--tc)}
+nav#tb .tg.on{background:var(--tc);box-shadow:0 0 0 2px #fff}
+nav#tb .tg[data-sec=memos]{--tc:#e07b00}nav#tb .tg[data-sec=home]{--tc:#1f6feb}nav#tb .tg[data-sec=sales]{--tc:#1a9b6c}
+nav#tb a{color:#fff;text-decoration:none;font-size:14px;padding:7px 12px;white-space:nowrap;display:block}
+nav#tb a.x{padding:7px 9px;font-size:12px;opacity:.75;border-left:1px solid rgba(255,255,255,.2)}
+nav#tb a:hover{background:rgba(255,255,255,.15)}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}
+.tiles .tile{margin:0;padding:14px 8px;text-align:center;border-top:5px solid var(--tc);background:var(--tl)}
+.tiles .tile[data-sec=memos]{--tc:#e07b00;--tl:#fff4e6}.tiles .tile[data-sec=home]{--tc:#1f6feb;--tl:#eaf2ff}.tiles .tile[data-sec=sales]{--tc:#1a9b6c;--tl:#e7f8f0}
+.mbtn{border:1px solid #cbb8ec;background:#f3ecfc;color:#573691}
+main h2{border-left:5px solid var(--c);padding-left:8px}
+.badge{background:var(--cl);color:var(--cd)}
+.tiles .tile b{font-size:15px;display:block}
+.tiles .tile .ic{font-size:26px;display:block;margin-bottom:4px}
+@media(max-width:520px){nav#tb{padding:6px;gap:4px}nav#tb a{font-size:12.5px;padding:7px 7px}nav#tb a.x{padding:7px 5px;font-size:11px}header .co{font-size:11px}.tiles .tile .mute{display:none}.tiles .tile b{font-size:13px}}
 header h1{font-size:17px;margin:0;flex:none;cursor:pointer}
 header .co{flex:1;min-width:0;text-align:right;font-size:12px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header .ver{font-size:11px;opacity:.7}
@@ -26,11 +48,12 @@ main{max-width:900px;margin:0 auto;padding:12px}
 input,select,textarea{width:100%;padding:9px;border:1px solid #c5cad3;border-radius:6px;font-size:16px;background:#fff;font-family:inherit}
 textarea{min-height:70px}
 button{padding:9px 13px;border:1px solid #c5cad3;background:#fff;border-radius:6px;font-size:14px;cursor:pointer;white-space:nowrap}
-button.pri{background:#1f6feb;color:#fff;border-color:#1f6feb}
+button.pri{background:var(--c);color:#fff;border-color:var(--c)}
 button.dng{color:#b42318;border-color:#e6b3ae}
 .card{background:#fff;border-radius:8px;padding:12px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .card.click{cursor:pointer}
-.tile{padding:18px}.tile b{font-size:18px}
+.tile{padding:18px}
+.card.click:hover{box-shadow:0 0 0 2px var(--c)}.tile b{font-size:18px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .sp{flex:1}
 .mute{color:#6b7280;font-size:13px}
@@ -49,12 +72,13 @@ label.fb{display:inline-block;margin:0;padding:9px 13px;border:1px solid #c5cad3
 #pdfbox{display:none;width:96vw;max-width:920px;height:76vh;overflow:auto;background:#525659;border-radius:6px;-webkit-overflow-scrolling:touch;color:#fff;text-align:center}
 #pdfbox canvas{display:block;margin:8px auto;background:#fff;max-width:100%;height:auto}
 #ov img{max-width:96vw;max-height:80vh}
-#busy{display:none;position:fixed;top:56px;right:12px;background:#111;color:#fff;padding:6px 12px;border-radius:6px;font-size:13px;z-index:30}
+#busy{display:none;position:fixed;top:104px;right:12px;background:#111;color:#fff;padding:6px 12px;border-radius:6px;font-size:13px;z-index:30}
 table th,table td{padding:5px 8px;border-bottom:1px solid #e5e7eb}td.n{text-align:right}
 </style>
 </head>
 <body>
-<header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2000</span><button onclick="reload()">更新</button></header>
+<div id="top"><header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2000</span><button onclick="reload()">更新</button></header>
+<nav id="tb"></nav></div>
 <main id="app">読み込み中...</main>
 <div id="ov"><img id="ovimg"><div id="pdfbox"></div><div class="row"><button id="ovdl" style="display:none">PDFをダウンロード</button><button id="ovdel" class="dng">削除</button><button onclick="closeOv()">閉じる</button></div></div>
 <div id="busy">処理中...</div>

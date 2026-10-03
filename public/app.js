@@ -48,15 +48,24 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-let view = {n:'menu'};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1};
+let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
+const TABS = [['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
+function tabOf(n){ return n === 'memos' ? 'memos' : n === 'sales' ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport') ? '' : 'home'; }
+function tbHtml(){
+  const cur = tabOf(view.n);
+  return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('');
+}
+// 通常のクリックはアプリ内で切り替え、Ctrl/⌘/Shift+クリックや中クリックはブラウザの新しいタブで開く
+function tbGo(e, n){ if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return true; go(n); return false; }
 const V = {};
 async function reload(){
   try { DB = await run('getAll'); render(); }
   catch (e) { if (e && e.silent) return; $('#app').innerHTML = '<div class="card"><b>データの読み込みに失敗しました</b><div class="mute" style="margin:8px 0;white-space:pre-wrap">' + esc((e && e.message) || e) + '</div><button onclick="reload()">再読み込み</button></div>'; }
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
-function go(n, p){ view = Object.assign({n:n}, p || {}); render(); window.scrollTo(0, 0); }
-function render(){ $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
+function render(){ document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -82,11 +91,11 @@ function listHtml(){
 function search(v){ view.q = v; $('#list').innerHTML = listHtml(); }
 V.menu = () => {
   const open = DB.memos.filter(m => m.status !== '完了').length;
-  return `<div class="card click tile" onclick="go('memos')"><b>📝 メモ帳</b><div class="mute">問い合わせ・注文・連絡事項の記録</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
-  <div class="card click tile" onclick="go('home')"><b>📄 見積管理</b><div class="mute">見積書の作成・案件・仕入先・回答の写真とPDF</div><div class="mute">案件 ${DB.projects.length}件</div></div>
-  <div class="card click tile" onclick="go('report')"><b>📊 集計</b><div class="mute">月別の見積件数・金額・受注率</div></div>
-  <div class="card click tile" onclick="go('sales')"><b>💴 売上データ</b><div class="mute">売上のCSVを取り込んで検索</div></div>
-  <h2><span>マスタ</span></h2><div class="row"><button onclick="go('customers')">顧客</button><button onclick="go('vendors')">仕入先</button></div>`;
+  return `<div class="tiles">
+  <div class="card click tile" data-sec="memos" onclick="go('memos')"><span class="ic">📝</span><b>メモ帳</b><div class="mute">問い合わせ・注文・連絡事項</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
+  <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
+  <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div></div>
+  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button></div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
@@ -110,7 +119,7 @@ V.sales = () => {
   <h2><span>💴 売上データ</span></h2>
   ${bs.length ? `<div class="card"><label style="margin-top:0">検索するデータ</label>
     <div class="row"><select id="sb" style="flex:1" onchange="SALES.res=null;go('sales',{b:this.value})">${bs.length > 1 ? `<option value="*"${view.b === '*' ? ' selected' : ''}>★ すべて（月をまたいで検索）</option>` : ''}${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}件・${esc(b.created)}）</option>`).join('')}</select>
-    <button class="dng" onclick="delSales()" ${view.b === '*' ? 'disabled' : ''}>削除</button></div>
+    </div>
     <label>検索（空白で区切ると、すべてを含む行だけ表示）</label>
     <input id="sq" value="${esc(view.sq || '')}" placeholder="得意先名・商品名・金額など" oninput="salesQ()">
     <div class="g" style="grid-template-columns:1fr 1fr;margin-top:6px">
@@ -121,11 +130,20 @@ V.sales = () => {
     <details style="margin-top:10px"><summary class="mute" style="cursor:pointer">表示する列を選ぶ</summary>
       <div class="row" style="margin:8px 0"><button onclick="salesColsAll(true)">すべて</button><button onclick="salesColsAll(false)">初期の列に戻す</button></div>
       <div style="max-height:220px;overflow:auto;font-size:13px">${cur.headers.map((h, i) => `<label style="display:inline-block;width:48%;margin:2px 0;color:#1f2937"><input type="checkbox" style="width:auto" ${salesCols(cur).includes(i) ? 'checked' : ''} onchange="salesColToggle(${i},this.checked)"> ${esc(h)}</label>`).join('')}</div></details></div>
-  <div id="sres">${salesResHtml()}</div>` : '<p class="mute">まだデータがありません。下のボタンからCSVを取り込んでください。</p>'}
-  <div class="card"><b>CSVを取り込む</b><div class="mute" style="margin:4px 0 8px">1行目が見出しのCSV（Shift_JIS・UTF-8どちらも可）。同じ名前で取り込むと置き換えます。</div>
-    <label>データの名前（例: 2026年度売上）</label><input id="sname" placeholder="名前">
-    <div style="margin-top:8px"><label class="fb">CSVファイルを選ぶ<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="importSales(this)"></label></div></div>`;
+  <div id="sres">${salesResHtml()}</div>` : '<div class="card"><p class="mute" style="margin:0 0 8px">まだ売上データがありません。マスタの「売上データ取込」からCSVを取り込んでください。</p><button class="pri" onclick="go(\'salesimport\')">売上データを取り込む</button></div>'}`;
 };
+V.salesimport = () => {
+  if (!SALES.batches) { loadSales2(); return '<div class="card">読み込み中...</div>'; }
+  const bs = SALES.batches;
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button onclick="go('sales')">売上データ検索へ →</button></div>
+  <h2><span>💴 売上データ取込</span></h2>
+  <div class="card"><b>CSVを取り込む</b><div class="mute" style="margin:4px 0 8px">1行目が見出しのCSV（Shift_JIS・UTF-8どちらも可）。同じ名前で取り込むと置き換えます。</div>
+    <label>データの名前（例: 2026年8月売上）</label><input id="sname" placeholder="名前">
+    <div style="margin-top:8px"><label class="fb">CSVファイルを選ぶ<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="importSales(this)"></label></div></div>
+  <h2><span>取り込み済みのデータ（${bs.length}件）</span></h2>
+  ${bs.map(b => `<div class="card"><div class="row"><div class="sp"><b>${esc(b.name)}</b><div class="mute">${b.count}件・${esc(b.created)}</div></div><button onclick="go('sales',{b:'${b.id}'})">検索</button><button class="dng" onclick="delSales('${b.id}')">削除</button></div></div>`).join('') || '<p class="mute">まだありません</p>'}`;
+};
+async function loadSales2(){ SALES.batches = await run('salesBatches'); if (view.n === 'salesimport') render(); }
 async function loadSales(){ SALES.batches = await run('salesBatches'); if (view.n === 'sales') render(); }
 let salesTimer = null, salesSeq = 0;
 function salesQ(now){
@@ -164,7 +182,7 @@ function salesResHtml(){
   const all = view.b === '*';
   const sumTxt = r.sum != null && view.scol >= 0 ? `　／　「${esc(H[view.scol])}」の合計 <b>${esc(fmtNum(String(Math.round(r.sum * 100) / 100)))}</b>` : '';
   return `<div class="mute" style="margin:6px 0">${r.total}件中 ${from}〜${to}件を表示${sumTxt}</div>
-  <div style="overflow:auto;background:#fff;border-radius:8px;max-height:70vh"><table style="border-collapse:collapse;font-size:13px;white-space:nowrap"><thead><tr>${all ? '<th style="background:#eef1f5;text-align:left;position:sticky;top:0">データ名</th>' : ''}${cols.map(i => `<th style="background:#eef1f5;text-align:left;position:sticky;top:0">${esc(H[i])}</th>`).join('')}</tr></thead><tbody>${
+  <div style="overflow:auto;background:#fff;border-radius:8px;max-height:70vh"><table style="border-collapse:collapse;font-size:13px;white-space:nowrap"><thead><tr>${all ? '<th style="background:var(--cl);text-align:left;position:sticky;top:0">データ名</th>' : ''}${cols.map(i => `<th style="background:var(--cl);text-align:left;position:sticky;top:0">${esc(H[i])}</th>`).join('')}</tr></thead><tbody>${
     r.rows.map((row, k) => '<tr>' + (all ? `<td>${esc((r.names || [])[k])}</td>` : '') + cols.map(i => cell(row, i)).join('') + '</tr>').join('') || `<tr><td colspan="${cols.length + 1}" class="mute">該当するデータがありません</td></tr>`}</tbody></table></div>
   ${all && r.skipped ? `<div class="mute">※見出しの形式が違う ${r.skipped}件のデータは、この検索に含まれません。個別に選んで検索してください。</div>` : ''}
   ${all ? '<div class="mute">※同じ期間のデータを重ねて取り込んでいると、二重に数えられます。</div>' : ''}
@@ -210,13 +228,13 @@ async function importSales(inp){
     SALES_NEW = id; SALES = {batches: null, res: null};
     alert('取り込みました（' + data.length + '件）');
   } finally { busy(-1); $('#busy').textContent = '処理中...'; }
-  go('sales', {b: SALES_NEW});
+  go('salesimport');
 }
-async function delSales(){
-  const b = salesCur();
-  if (!b || b.id === '*' || !confirm('「' + b.name + '」（' + b.count + '件）を削除します。よろしいですか？')) return;
+async function delSales(id){
+  const b = (SALES.batches || []).find(x => x.id === id);
+  if (!b || !confirm('「' + b.name + '」（' + b.count + '件）を削除します。よろしいですか？')) return;
   await run('salesDelete', b.id);
-  SALES = {batches: null, res: null}; go('sales');
+  SALES = {batches: null, res: null}; go('salesimport');
 }
 V.report = () => {
   const won = q => q.result === '受注', lost = q => q.result === '失注';
@@ -233,13 +251,13 @@ V.report = () => {
   const rate = m => (m.w + m.l) ? Math.round(m.w / (m.w + m.l) * 100) + '%' : '-';
   const row = (k, m, b) => `<tr${b ? ' style="font-weight:bold;background:#f3f4f6"' : ''}><td>${k}</td><td class="n">${m.n}</td><td class="n">${yen(m.amt)}</td><td class="n">${m.w}</td><td class="n">${yen(m.wamt)}</td><td class="n">${m.l}</td><td class="n">${rate(m)}</td><td class="n">${m.profit ? yen(m.profit) : '-'}</td></tr>`;
   const open = DB.quotes.filter(q => (q.result || '未定') === '未定');
-  return `<div class="bar"><button onclick="go('menu')">← メニュー</button></div>
+  return `<div class="bar"><button onclick="go('home')">← 見積管理</button></div>
   <div class="card" style="overflow-x:auto"><b>月別集計（見積書発行日ベース・直近24か月）</b>
   <table style="border-collapse:collapse;width:100%;margin-top:8px;font-size:13px;white-space:nowrap"><thead><tr style="background:#eef1f6"><th>月</th><th>見積件数</th><th>見積金額(税込)</th><th>受注件数</th><th>受注金額(税込)</th><th>失注件数</th><th>受注率</th><th>粗利(原価入力分)</th></tr></thead><tbody>${keys.map(k => row(k, M[k])).join('') + (keys.length ? row('合計', T, true) : '<tr><td colspan="8" class="mute">見積書がまだありません</td></tr>')}</tbody></table>
   <div class="mute" style="margin-top:8px">受注率 = 受注 ÷ (受注 + 失注)。見積書の編集画面で「結果」を受注/失注にすると集計されます。</div></div>
   <div class="card"><b>結果が未定の見積書（${open.length}件）</b>${open.slice().sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate))).slice(0, 30).map(q => { const p = proj(q.projectId); return `<div class="card click" style="margin:8px 0 0" onclick="go('project',{id:'${q.projectId}'})"><div class="row"><span class="sp">${esc(cust(p.customerId).name || '')} / ${esc(q.subject || p.name)}</span><b>¥${yen(q.total)}</b></div><div class="mute">${esc(q.no)}　発行 ${esc(q.issueDate)}</div></div>`; }).join('') || '<div class="mute">なし</div>'}</div>`;
 };
-V.home = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><input id="q" placeholder="案件を検索（顧客・見積・品名・仕入先）" value="${esc(view.q)}" oninput="search(this.value)"><button class="pri" onclick="editProject()">＋案件</button></div><div id="list">${listHtml()}</div>`;
+V.home = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><button onclick="go('report')">📊 集計</button><input id="q" placeholder="案件を検索（顧客・見積・品名・仕入先）" value="${esc(view.q)}" oninput="search(this.value)"><button class="pri" onclick="editProject()">＋案件</button></div><div id="list">${listHtml()}</div>`;
 
 // ---------- 汎用フォーム ----------
 function fld(f, v){
@@ -698,4 +716,5 @@ async function expXlsx(id){
   XLSX.writeFile(wb, '見積書_' + b.q.no + '.xlsx');
 }
 
+$("#tb").innerHTML = tbHtml();
 reload();
