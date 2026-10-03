@@ -106,6 +106,25 @@ CREATE TABLE IF NOT EXISTS "file_chunks" (
   PRIMARY KEY ("fid", "seq")
 );
 
+CREATE TABLE IF NOT EXISTS "sales_batches" (
+  "id" TEXT PRIMARY KEY,
+  "name" TEXT,
+  "headers" TEXT,
+  "count" TEXT,
+  "created" TEXT,
+  "by" TEXT
+);
+
+CREATE TABLE IF NOT EXISTS "sales_rows" (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "batch" TEXT NOT NULL,
+  "seq" INTEGER,
+  "data" TEXT,
+  "search" TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sales_rows_batch ON "sales_rows"("batch","seq");
+
 CREATE INDEX IF NOT EXISTS idx_lines_quote ON "lines"("quoteId");
 
 CREATE INDEX IF NOT EXISTS idx_quotes_project ON "quotes"("projectId");

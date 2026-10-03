@@ -7,6 +7,17 @@ const nowStr = () => new Date(Date.now() + JST).toISOString().slice(0, 16).repla
 const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
 const newFileId = () => crypto.randomUUID().replace(/-/g, '');
 
+// 検索用に表記ゆれをそろえる(全角/半角・大文字/小文字・カタカナ/ひらがな)
+function normSearch(t) {
+  return String(t == null ? '' : t).normalize('NFKC').toLowerCase().replace(/[\u30a1-\u30f6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
+
+function salesMeta(raw) {
+  let m; try { m = JSON.parse(raw || '[]'); } catch (e) { m = []; }
+  if (Array.isArray(m)) return { h: m, show: [], scols: [], dcol: -1, scol: -1 };
+  return { h: m.h || [], show: m.show || [], scols: m.scols || [], dcol: Number.isInteger(m.dcol) ? m.dcol : -1, scol: Number.isInteger(m.scol) ? m.scol : -1 };
+}
+
 // ===== D1の読み書き =====
 function conv(key, r) {
   const o = {};
@@ -232,6 +243,73 @@ const API = {
     }
     for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
     return { added: added, updated: updated };
+  },
+
+  // ===== 売上データ(CSVを取り込んで検索) =====
+  // headers 列にはJSON {h:[見出し], show:[初期表示の列番号], scols:[検索対象の列番号], dcol:日付列, scol:金額列} を入れる(旧形式の配列も読める)
+  async salesBatches(env) {
+    const r = await env.DB.prepare('SELECT id,name,headers,count,created,"by" FROM sales_batches ORDER BY created DESC, id DESC').all();
+    return (r.results || []).map(b => { const m = salesMeta(b.headers); return { id: b.id, name: b.name, headers: m.h, show: m.show, dcol: m.dcol, scol: m.scol, count: Number(b.count) || 0, created: b.created, by: b.by }; });
+  },
+  async salesBegin(env, ctx, name, meta, replace) {
+    name = String(name || '').trim().slice(0, 100);
+    if (!name) throw fail('名前を入力してください');
+    const h = meta && Array.isArray(meta.h) ? meta.h : [];
+    if (!h.length || h.length > 300) throw fail('見出し行が正しくありません');
+    const okIdx = a => (Array.isArray(a) ? a : []).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < h.length);
+    const m = { h: h.map(x => String(x == null ? '' : x).slice(0, 100)), show: okIdx(meta.show), scols: okIdx(meta.scols), dcol: Number.isInteger(meta.dcol) ? meta.dcol : -1, scol: Number.isInteger(meta.scol) ? meta.scol : -1 };
+    if (replace) {
+      const old = await env.DB.prepare('SELECT id FROM sales_batches WHERE name = ?').bind(name).all();
+      for (const o of old.results || []) await API.salesDelete(env, ctx, o.id);
+    }
+    const id = newId() + newId();
+    await env.DB.prepare('INSERT INTO sales_batches (id,name,headers,count,created,"by") VALUES (?,?,?,?,?,?)')
+      .bind(id, name, JSON.stringify(m), '0', nowStr(), ctx.email || '').run();
+    return id;
+  },
+  async salesAdd(env, ctx, batchId, startSeq, rows) {
+    const b = await env.DB.prepare('SELECT headers FROM sales_batches WHERE id = ?').bind(String(batchId)).first();
+    if (!b) throw fail('取り込み先が見つかりません');
+    const meta = salesMeta(b.headers);
+    if (!Array.isArray(rows) || rows.length > 500) throw fail('一度に送れる行数を超えています');
+    const stmts = [];
+    rows.forEach((r, i) => {
+      const cells = (Array.isArray(r) ? r : []).map(c => String(c == null ? '' : c).slice(0, 2000));
+      const text = (meta.scols.length ? meta.scols : cells.map((_, k) => k)).map(k => cells[k] || '').join(' ');
+      stmts.push(env.DB.prepare('INSERT INTO sales_rows (batch,seq,data,search) VALUES (?,?,?,?)')
+        .bind(String(batchId), Number(startSeq) + i, JSON.stringify(cells), normSearch(text)));
+    });
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return rows.length;
+  },
+  async salesFinish(env, ctx, batchId) {
+    const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM sales_rows WHERE batch = ?').bind(String(batchId)).first();
+    await env.DB.prepare('UPDATE sales_batches SET count = ? WHERE id = ?').bind(String(c.n), String(batchId)).run();
+    return c.n;
+  },
+  async salesDelete(env, ctx, batchId) {
+    await env.DB.prepare('DELETE FROM sales_rows WHERE batch = ?').bind(String(batchId)).run();
+    await env.DB.prepare('DELETE FROM sales_batches WHERE id = ?').bind(String(batchId)).run();
+    return true;
+  },
+  // opt: {dcol, from, to, scol}  日付列での期間絞り込みと、金額列の合計
+  async salesSearch(env, ctx, batchId, q, offset, opt) {
+    opt = opt || {};
+    const terms = normSearch(q).split(/\s+/).filter(Boolean).slice(0, 8);
+    let where = 'batch = ?'; const binds = [String(batchId)];
+    for (const t of terms) { where += " AND search LIKE ? ESCAPE '\\'"; binds.push('%' + t.replace(/[\\%_]/g, m => '\\' + m) + '%'); }
+    const dcol = Number(opt.dcol), scol = Number(opt.scol);
+    const ymd = v => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(String(v || '').trim()); return m ? m[1] + '/' + m[2].padStart(2, '0') + '/' + m[3].padStart(2, '0') : ''; };
+    if (Number.isInteger(dcol) && dcol >= 0 && dcol < 300) {
+      const f = ymd(opt.from), t = ymd(opt.to);
+      if (f) { where += ` AND json_extract(data,'$[${dcol}]') >= ?`; binds.push(f); }
+      if (t) { where += ` AND json_extract(data,'$[${dcol}]') <= ?`; binds.push(t); }
+    }
+    const off = Math.max(0, Number(offset) || 0), LIM = 100;
+    const sumExpr = Number.isInteger(scol) && scol >= 0 && scol < 300 ? `, SUM(CAST(REPLACE(json_extract(data,'$[${scol}]'),',','') AS REAL)) AS s` : '';
+    const agg = await env.DB.prepare('SELECT COUNT(*) AS n' + sumExpr + ' FROM sales_rows WHERE ' + where).bind(...binds).first();
+    const r = await env.DB.prepare('SELECT data FROM sales_rows WHERE ' + where + ' ORDER BY seq LIMIT ' + LIM + ' OFFSET ' + off).bind(...binds).all();
+    return { total: agg.n, sum: sumExpr ? (agg.s == null ? 0 : agg.s) : null, offset: off, limit: LIM, rows: (r.results || []).map(x => JSON.parse(x.data)) };
   },
 
   // 手書きメモの文字起こし(Gemini)

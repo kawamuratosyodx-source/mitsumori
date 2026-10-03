@@ -85,8 +85,131 @@ V.menu = () => {
   return `<div class="card click tile" onclick="go('memos')"><b>📝 メモ帳</b><div class="mute">問い合わせ・注文・連絡事項の記録</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
   <div class="card click tile" onclick="go('home')"><b>📄 見積管理</b><div class="mute">見積書の作成・案件・仕入先・回答の写真とPDF</div><div class="mute">案件 ${DB.projects.length}件</div></div>
   <div class="card click tile" onclick="go('report')"><b>📊 集計</b><div class="mute">月別の見積件数・金額・受注率</div></div>
+  <div class="card click tile" onclick="go('sales')"><b>💴 売上データ</b><div class="mute">売上のCSVを取り込んで検索</div></div>
   <h2><span>マスタ</span></h2><div class="row"><button onclick="go('customers')">顧客</button><button onclick="go('vendors')">仕入先</button></div>`;
 };
+// ---------- 売上データ(CSV取込・検索) ----------
+let SALES = {batches: null, res: null};
+const salesCur = () => (SALES.batches || []).find(b => b.id === view.b);
+function salesCols(b){ // 表示する列(利用者が選んだもの。なければ初期値)
+  try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
+  return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
+}
+V.sales = () => {
+  if (!SALES.batches) { loadSales(); return '<div class="card">読み込み中...</div>'; }
+  const bs = SALES.batches;
+  if (view.b == null) view.b = bs.length ? bs[0].id : '';
+  const cur = salesCur();
+  if (cur && view.dcol == null) { view.dcol = cur.dcol; view.scol = cur.scol; }
+  const opts = (sel) => '<option value="-1">（なし）</option>' + (cur ? cur.headers.map((h, i) => `<option value="${i}"${i === sel ? ' selected' : ''}>${esc(h)}</option>`).join('') : '');
+  return `<div class="row" style="margin-bottom:8px"><button onclick="go('menu')">← メニュー</button><span class="sp"></span></div>
+  <h2><span>💴 売上データ</span></h2>
+  ${bs.length ? `<div class="card"><label style="margin-top:0">検索するデータ</label>
+    <div class="row"><select id="sb" style="flex:1" onchange="view.b=this.value;view.sq='';view.off=0;view.dcol=null;SALES.res=null;go('sales')">${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}件・${esc(b.created)}）</option>`).join('')}</select>
+    <button class="dng" onclick="delSales()">削除</button></div>
+    <label>検索（空白で区切ると、すべてを含む行だけ表示）</label>
+    <input id="sq" value="${esc(view.sq || '')}" placeholder="得意先名・商品名・金額など" oninput="salesQ()">
+    <div class="g" style="grid-template-columns:1fr 1fr;margin-top:6px">
+      <div><label>期間（から）</label><input id="sfrom" type="date" value="${esc(view.from || '')}" onchange="salesQ(1)"></div>
+      <div><label>期間（まで）</label><input id="sto" type="date" value="${esc(view.to || '')}" onchange="salesQ(1)"></div>
+      <div><label>期間に使う列</label><select id="sdcol" onchange="salesQ(1)">${opts(view.dcol)}</select></div>
+      <div><label>合計する列</label><select id="sscol" onchange="salesQ(1)">${opts(view.scol)}</select></div></div>
+    <details style="margin-top:10px"><summary class="mute" style="cursor:pointer">表示する列を選ぶ</summary>
+      <div class="row" style="margin:8px 0"><button onclick="salesColsAll(true)">すべて</button><button onclick="salesColsAll(false)">初期の列に戻す</button></div>
+      <div style="max-height:220px;overflow:auto;font-size:13px">${cur.headers.map((h, i) => `<label style="display:inline-block;width:48%;margin:2px 0;color:#1f2937"><input type="checkbox" style="width:auto" ${salesCols(cur).includes(i) ? 'checked' : ''} onchange="salesColToggle(${i},this.checked)"> ${esc(h)}</label>`).join('')}</div></details></div>
+  <div id="sres">${salesResHtml()}</div>` : '<p class="mute">まだデータがありません。下のボタンからCSVを取り込んでください。</p>'}
+  <div class="card"><b>CSVを取り込む</b><div class="mute" style="margin:4px 0 8px">1行目が見出しのCSV（Shift_JIS・UTF-8どちらも可）。同じ名前で取り込むと置き換えます。</div>
+    <label>データの名前（例: 2026年度売上）</label><input id="sname" placeholder="名前">
+    <div style="margin-top:8px"><label class="fb">CSVファイルを選ぶ<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="importSales(this)"></label></div></div>`;
+};
+async function loadSales(){ SALES.batches = await run('salesBatches'); if (view.n === 'sales') render(); }
+let salesTimer = null, salesSeq = 0;
+function salesQ(now){
+  view.sq = ($('#sq') || {}).value || ''; view.from = ($('#sfrom') || {}).value || ''; view.to = ($('#sto') || {}).value || '';
+  view.dcol = Number(($('#sdcol') || {value: -1}).value); view.scol = Number(($('#sscol') || {value: -1}).value);
+  view.off = 0; clearTimeout(salesTimer); salesTimer = setTimeout(doSales, now ? 0 : 350);
+}
+async function doSales(){
+  if (!view.b) return;
+  const my = ++salesSeq;
+  const r = await run('salesSearch', view.b, view.sq || '', view.off || 0, {dcol: view.dcol, from: view.from, to: view.to, scol: view.scol});
+  if (my !== salesSeq) return;
+  SALES.res = r; const e = $('#sres'); if (e) e.innerHTML = salesResHtml();
+}
+function salesPage(d){ view.off = Math.max(0, (view.off || 0) + d); doSales(); $('#sres').scrollIntoView(); }
+function salesColToggle(i, on){
+  const b = salesCur(); let c = salesCols(b).slice();
+  c = on ? c.concat([i]) : c.filter(x => x !== i);
+  c = Array.from(new Set(c)).sort((x, y) => x - y);
+  try { localStorage.setItem('scols:' + b.id, JSON.stringify(c)); } catch (e) {}
+  $('#sres').innerHTML = salesResHtml();
+}
+function salesColsAll(all){
+  const b = salesCur();
+  try { if (all) localStorage.setItem('scols:' + b.id, JSON.stringify(b.headers.map((_, i) => i))); else localStorage.removeItem('scols:' + b.id); } catch (e) {}
+  render();
+}
+function salesResHtml(){
+  const b = salesCur();
+  if (!b) return '';
+  if (!SALES.res) { setTimeout(doSales, 0); return '<p class="mute">検索中...</p>'; }
+  const r = SALES.res, H = b.headers, cols = salesCols(b).filter(i => i < H.length);
+  const isMoney = i => /(金額|単価|額|合計|税|原価|粗利|売上|仕入|利益|送料|値引|返品)/.test(H[i]) && !/(コード|番号|日|率|区分|方法|状態)/.test(H[i]);
+  const from = r.total ? r.offset + 1 : 0, to = r.offset + r.rows.length;
+  const cell = (row, i) => { const v = row[i] == null ? '' : row[i]; if (isMoney(i)) { const n = String(v).replace(/,/g, ''); return `<td class="n">${esc(n !== '' && !isNaN(Number(n)) ? fmtNum(String(Number(n))) : v)}</td>`; } return `<td>${esc(v)}</td>`; };
+  const sumTxt = r.sum != null && view.scol >= 0 ? `　／　「${esc(H[view.scol])}」の合計 <b>${esc(fmtNum(String(Math.round(r.sum * 100) / 100)))}</b>` : '';
+  return `<div class="mute" style="margin:6px 0">${r.total}件中 ${from}〜${to}件を表示${sumTxt}</div>
+  <div style="overflow:auto;background:#fff;border-radius:8px;max-height:70vh"><table style="border-collapse:collapse;font-size:13px;white-space:nowrap"><thead><tr>${cols.map(i => `<th style="background:#eef1f5;text-align:left;position:sticky;top:0">${esc(H[i])}</th>`).join('')}</tr></thead><tbody>${
+    r.rows.map(row => '<tr>' + cols.map(i => cell(row, i)).join('') + '</tr>').join('') || `<tr><td colspan="${cols.length}" class="mute">該当するデータがありません</td></tr>`}</tbody></table></div>
+  <div class="row" style="margin:10px 0"><button ${r.offset <= 0 ? 'disabled' : ''} onclick="salesPage(-${r.limit})">← 前の${r.limit}件</button><button ${to >= r.total ? 'disabled' : ''} onclick="salesPage(${r.limit})">次の${r.limit}件 →</button></div>`;
+}
+// 取り込み時に、表示する列・検索に使う列・日付列・金額列を見出しとデータから決める
+function salesPlan(head, data){
+  const n = head.length;
+  const distinct = i => { const s = new Set(); for (let k = 0; k < data.length && s.size < 2; k++) s.add(data[k][i] == null ? '' : data[k][i]); return s.size; };
+  const nonEmpty = i => data.some(r => r[i] != null && String(r[i]).trim() !== '');
+  const varying = head.map((_, i) => nonEmpty(i) && distinct(i) > 1);
+  const own = /^自社(名称|郵便|住所|電話|FAX|：振込先)/;
+  const scols = head.map((_, i) => i).filter(i => varying[i] && !own.test(head[i]));
+  const pref = ['売上日', '伝票日付', '日付', '売上番号', '伝票番号', '得意先コード', '得意先名', '得意先', '件名', '商品コード', '商品名', '商品名（下段）', '数量', '販売単価', '単価', '販売額', '金額', '備考'];
+  let show = pref.map(p => head.indexOf(p)).filter(i => i >= 0 && nonEmpty(i));
+  show = Array.from(new Set(show)).sort((a, b) => a - b);
+  if (show.length < 3) show = scols.slice(0, 12);
+  const find = (names, re) => { for (const nm of names) { const i = head.indexOf(nm); if (i >= 0) return i; } return head.findIndex(h => re.test(h)); };
+  const dcol = find(['売上日', '伝票日付', '日付'], /(売上日|伝票日|日付)$/);
+  const scol = find(['販売額', '金額'], /(販売額|金額|売上額)/);
+  return {h: head, show: show, scols: scols, dcol: dcol, scol: scol};
+}
+async function importSales(inp){
+  const file = inp.files[0]; inp.value = ''; if (!file) return;
+  const name = ($('#sname').value || '').trim() || file.name.replace(/\.[^.]+$/, '');
+  const buf = await file.arrayBuffer();
+  let text; try { text = new TextDecoder('utf-8', {fatal: true}).decode(buf); } catch (e) { text = new TextDecoder('shift_jis').decode(buf); }
+  text = text.replace(/^﻿/, '');
+  const rows = parseCsv(text).filter(r => r.some(c => String(c).trim() !== ''));
+  if (rows.length < 2) return alert('データが見つかりませんでした（見出し行とデータ行が必要です）');
+  const head = rows[0].map(h => String(h).trim()), data = rows.slice(1);
+  if (!confirm('「' + name + '」として ' + data.length + '件を取り込みます。\n同じ名前のデータがあれば置き換えます。よろしいですか？')) return;
+  const plan = salesPlan(head, data);
+  busy(1);
+  try {
+    const id = await run('salesBegin', name, plan, true);
+    for (let i = 0; i < data.length; i += 200) {
+      $('#busy').textContent = '取込中 ' + Math.min(i + 200, data.length) + ' / ' + data.length;
+      await run('salesAdd', id, i, data.slice(i, i + 200));
+    }
+    await run('salesFinish', id);
+    view.b = id; view.sq = ''; view.off = 0; view.from = view.to = ''; view.dcol = null; SALES = {batches: null, res: null};
+    alert('取り込みました（' + data.length + '件）');
+  } finally { busy(-1); $('#busy').textContent = '処理中...'; }
+  go('sales');
+}
+async function delSales(){
+  const b = salesCur();
+  if (!b || !confirm('「' + b.name + '」（' + b.count + '件）を削除します。よろしいですか？')) return;
+  await run('salesDelete', b.id);
+  view.b = null; view.dcol = null; SALES = {batches: null, res: null}; go('sales');
+}
 V.report = () => {
   const won = q => q.result === '受注', lost = q => q.result === '失注';
   const M = {};
