@@ -264,7 +264,7 @@ function fld(f, v){
   const val = v[f.k] == null ? '' : v[f.k];
   const id = 'f_' + f.k;
   if (f.t === 'textarea') return `<label>${f.l}</label><textarea id="${id}" rows="${f.rows || 3}">${esc(val)}</textarea>`;
-  if (f.t === 'select') return `<label>${f.l}</label><select id="${id}" ${f.blank ? 'data-blank="1"' : ''}>${f.o.map(o => `<option value="${esc(o[0])}" ${String(o[0]) === String(val) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
+  if (f.t === 'select') return `<label>${f.l}</label><select id="${id}" ${f.blank ? 'data-blank="1"' : ''} ${f.blankText ? 'data-bt="' + esc(f.blankText) + '"' : ''}>${f.o.map(o => `<option value="${esc(o[0])}" ${String(o[0]) === String(val) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
   if (f.t === 'money') return `<label>${f.l}</label><input id="${id}" type="text" inputmode="numeric" value="${esc(fmtNum(val))}" oninput="numIn(this,event)" oncompositionend="numIn(this)" onchange="numIn(this)">`;
   return `<label>${f.l}</label><input id="${id}" type="${f.t || 'text'}" value="${esc(val)}"${f.oi ? ` oninput="${f.oi}"` : ''}>`;
 }
@@ -281,6 +281,19 @@ async function submitForm(){
   const c = view.cfg; const o = Object.assign({}, c.vals);
   c.fields.forEach(f => { o[f.k] = $('#f_' + f.k).value; if (f.t === 'money') o[f.k] = rawNum(o[f.k]); });
   if (o.vendorPick) o.vendor = o.vendorPick;
+  if (c.table === 'projects') {
+    const nc = String(o.newCust || '').trim(); delete o.newCust;
+    if (nc) {
+      const hit = DB.customers.find(x => x.name === nc);
+      if (hit) o.customerId = hit.id;
+      else {
+        if (!confirm('「' + nc + '」を新しい顧客として登録します。よろしいですか？\n（顧客の詳細は、あとでメニューの「顧客」から編集できます）')) return;
+        const cu = await run('save', 'customers', {name: nc, code: '', contact: '', address: '', tel: '', email: '', memo: ''});
+        o.customerId = cu.id;
+      }
+    }
+    if (!o.customerId) return alert('顧客を選ぶか、新しい顧客名を入力してください');
+  }
   if (c.required && !o[c.required]) return alert('必須項目が未入力です');
   const saved = await run('save', c.table, o);
   await reload0();
@@ -411,23 +424,22 @@ function editMemo(id){
 function filterCust(v){
   const sel = $('#f_customerId'), cur = sel.value, words = String(v).toLowerCase().split(/\s+/).filter(Boolean);
   const opts = DB.customers.filter(c => { const t = [c.code, c.name].join(' ').toLowerCase(); return c.id === cur || words.every(w => t.includes(w)); });
-  const blank = sel.dataset.blank ? '<option value="">（顧客なし・未登録の相手）</option>' : '';
+  const blank = sel.dataset.blank ? '<option value="">' + esc(sel.dataset.bt || '（顧客なし・未登録の相手）') + '</option>' : '';
   sel.innerHTML = blank + opts.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? 'selected' : ''}>${esc(c.name)}（${esc(c.code)}）</option>`).join('');
 }
 function memoToProject(mid){
   const m = DB.memos.find(x => x.id === mid); if (!m) return;
-  if (!m.customerId) return alert('先にメモの「顧客」を選んで保存してください（案件には顧客が必要です）。');
   const lines = String(m.body || '').split('\n');
-  editProject('', {customerId: m.customerId, name: lines[0].slice(0, 60), memo: m.body, fromMemo: m});
+  editProject('', {customerId: m.customerId || '', name: lines[0].slice(0, 60), memo: m.body, fromMemo: m, newCust: m.customerId ? '' : (m.who || '')});
 }
 function editProject(id, pre){
-  const vals = id ? Object.assign({}, proj(id)) : Object.assign({status:'進行中'}, pre && {customerId: pre.customerId, name: pre.name, memo: pre.memo});
-  if (!DB.customers.length) { alert('先に顧客を登録してください'); return go('customers'); }
+  const vals = id ? Object.assign({}, proj(id)) : Object.assign({status:'進行中'}, pre && {customerId: pre.customerId, name: pre.name, memo: pre.memo, newCust: pre.newCust});
   openForm({title: id ? '案件の編集' : '案件の追加', table: 'projects', vals: vals, required: 'name',
-    fields: [{k:'custFilter',l:'顧客を検索（名前・コード）',oi:'filterCust(this.value)'},{k:'customerId',l:'顧客',t:'select',o:DB.customers.map(c => [c.id, c.name])},{k:'name',l:'案件名'},
+    fields: [{k:'custFilter',l:'顧客を検索（名前・コード）',oi:'filterCust(this.value)'},{k:'customerId',l:'顧客（登録済みから選ぶ）',t:'select',blank:true,blankText:'（選択してください）',o:[['', '（選択してください）']].concat(DB.customers.map(c => [c.id, c.name]))},
+      {k:'newCust',l:'登録されていない顧客は、ここに名前を入力（保存と同時に顧客として登録されます）'},{k:'name',l:'案件名'},
       {k:'status',l:'状態',t:'select',o:['進行中','見積提出済','受注','失注','完了'].map(x => [x, x])},{k:'memo',l:'メモ',t:'textarea'}],
     onDelete: !!id, afterDelete: () => go('home'),
-    after: pre && pre.fromMemo ? async (s) => { await run('save', 'memos', Object.assign({}, pre.fromMemo, {projectId: s.id, status: pre.fromMemo.status === '未対応' ? '対応中' : pre.fromMemo.status})); await reload0(); go('project', {id: s.id}); } : () => go('home')});
+    after: pre && pre.fromMemo ? async (s) => { await run('save', 'memos', Object.assign({}, pre.fromMemo, {projectId: s.id, customerId: pre.fromMemo.customerId || s.customerId, status: pre.fromMemo.status === '未対応' ? '対応中' : pre.fromMemo.status})); await reload0(); go('project', {id: s.id}); } : () => go('home')});
 }
 V.project = () => {
   const p = proj(view.id), c = cust(p.customerId);
