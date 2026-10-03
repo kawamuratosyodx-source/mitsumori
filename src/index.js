@@ -1,0 +1,324 @@
+import { CONFIG, TABLES, NUMERIC } from './config.js';
+import { verifyAccess, login } from './auth.js';
+import { quoteHtml, requestHtml } from './pdf.js';
+
+const JST = 9 * 3600 * 1000;
+const nowStr = () => new Date(Date.now() + JST).toISOString().slice(0, 16).replace('T', ' ');
+const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+const newFileId = () => crypto.randomUUID().replace(/-/g, '');
+
+// ===== D1の読み書き =====
+function conv(key, r) {
+  const o = {};
+  for (const c of TABLES[key]) {
+    let v = r[c];
+    if (v === null || v === undefined) v = '';
+    if (v !== '' && (NUMERIC[key] || []).includes(c)) v = Number(v);
+    o[c] = v;
+  }
+  return o;
+}
+async function readAll(env, key, where, ...binds) {
+  const sql = 'SELECT * FROM "' + key + '"' + (where ? ' WHERE ' + where : '');
+  const { results } = await env.DB.prepare(sql).bind(...binds).all();
+  return results.map(r => conv(key, r));
+}
+const rowVals = (key, obj) => TABLES[key].map(c => (obj[c] === undefined || obj[c] === null ? '' : String(obj[c])));
+function upsertStmt(env, key, obj) {
+  const cols = TABLES[key];
+  return env.DB.prepare('INSERT OR REPLACE INTO "' + key + '" (' + cols.map(c => '"' + c + '"').join(',') + ') VALUES (' + cols.map(() => '?').join(',') + ')').bind(...rowVals(key, obj));
+}
+const delStmt = (env, key, col, val) => env.DB.prepare('DELETE FROM "' + key + '" WHERE "' + col + '" = ?').bind(String(val));
+
+// ===== 写真・PDFの保存(D1の中。大きなファイルは小分けにして保存する) =====
+const CHUNK = 600 * 1000; // 1行の上限(約2MB)に収まるよう、base64文字列を600KBずつ保存
+function bytesToB64(u8) {
+  let bin = '';
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+async function putFile(env, id, ctype, name, b64) {
+  const parts = [];
+  for (let i = 0; i < b64.length; i += CHUNK) parts.push(b64.slice(i, i + CHUNK));
+  const stmts = [env.DB.prepare('INSERT INTO "files" ("id","ctype","name","size","chunks","created") VALUES (?,?,?,?,?,?)').bind(id, ctype, String(name || ''), String(Math.floor(b64.length * 3 / 4)), String(parts.length), nowStr())];
+  parts.forEach((d, i) => stmts.push(env.DB.prepare('INSERT INTO "file_chunks" ("fid","seq","data") VALUES (?,?,?)').bind(id, i, d)));
+  try { await env.DB.batch(stmts); }
+  catch (e) { try { await deleteFile(env, id); } catch (e2) { /* 後始末 */ } throw e; }
+}
+async function getFile(env, id) {
+  const f = await env.DB.prepare('SELECT * FROM "files" WHERE "id" = ?').bind(id).first();
+  if (!f) return null;
+  const { results } = await env.DB.prepare('SELECT "data" FROM "file_chunks" WHERE "fid" = ? ORDER BY "seq"').bind(id).all();
+  if (results.length !== Number(f.chunks)) return null;
+  return { ctype: f.ctype, bytes: b64ToBytes(results.map(r => r.data).join('')) };
+}
+async function deleteFile(env, id) {
+  await env.DB.batch([env.DB.prepare('DELETE FROM "file_chunks" WHERE "fid" = ?').bind(id), env.DB.prepare('DELETE FROM "files" WHERE "id" = ?').bind(id)]);
+}
+
+function fail(msg) { const e = new Error(msg); e.app = true; return e; }
+
+// ===== 機能(Apps Script版と同じ名前) =====
+const API = {
+  async getAll(env) {
+    const o = {};
+    for (const k of Object.keys(TABLES)) o[k] = await readAll(env, k);
+    o.dbUrl = '';
+    return o;
+  },
+
+  async save(env, ctx, key, obj) {
+    if (!TABLES[key] || key === 'lines' || key === 'quotes') throw fail('invalid table');
+    obj = Object.assign({}, obj);
+    if (!obj.id) obj.id = newId();
+    if (!obj.created) obj.created = nowStr();
+    if (key === 'requests') {
+      if (!obj.author) obj.author = ctx.email;
+      // 写真の紐付けは別の操作で更新されるため、保存のたびに最新のものを引き継ぐ(古い画面からの上書きを防ぐ)
+      const cur = (await readAll(env, 'requests', '"id" = ?', obj.id))[0];
+      obj.photos = cur ? cur.photos : '';
+    }
+    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); }
+    await upsertStmt(env, key, obj).run();
+    return obj;
+  },
+
+  async remove(env, ctx, key, id) {
+    if (!TABLES[key] || key === 'lines') throw fail('invalid table');
+    id = String(id);
+    const stmts = [];
+    if (key === 'customers') {
+      const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM "projects" WHERE "customerId" = ?').bind(id).first();
+      if (n.n > 0) throw fail('この顧客には案件があるため削除できません');
+    }
+    if (key === 'projects') {
+      const a = await env.DB.prepare('SELECT COUNT(*) AS n FROM "quotes" WHERE "projectId" = ?').bind(id).first();
+      const b = await env.DB.prepare('SELECT COUNT(*) AS n FROM "requests" WHERE "projectId" = ?').bind(id).first();
+      if (a.n > 0 || b.n > 0) throw fail('見積または仕入先が残っているため削除できません');
+      stmts.push(env.DB.prepare('UPDATE "memos" SET "projectId" = \'\' WHERE "projectId" = ?').bind(id));
+    }
+    if (key === 'quotes') stmts.push(delStmt(env, 'lines', 'quoteId', id));
+    if (key === 'requests') {
+      const r = (await readAll(env, 'requests', '"id" = ?', id))[0];
+      if (r) for (const t of String(r.photos || '').split(',').filter(Boolean)) { try { await deleteFile(env, t.split('|')[0]); } catch (e) { /* 既に無い */ } }
+    }
+    stmts.push(delStmt(env, key, TABLES[key][0], id));
+    await env.DB.batch(stmts);
+    return true;
+  },
+
+  async saveQuote(env, ctx, q, lines) {
+    q = Object.assign({}, q);
+    const rate = Number(q.taxRate);
+    let sub = 0;
+    const ls = (lines || []).filter(l => String(l.item || '').trim() !== '').map((l, i) => {
+      const qty = Number(l.qty) || 0, price = Number(l.price) || 0;
+      const amount = Math.round(qty * price);
+      sub += amount;
+      const hasCost = !(l.cost === '' || l.cost === null || l.cost === undefined);
+      return { quoteId: '', row: i + 1, item: l.item, qty: qty, unit: l.unit || '', price: price, amount: amount, note: l.note || '', cost: hasCost ? (Number(l.cost) || 0) : '' };
+    });
+    q.taxRate = isNaN(rate) || q.taxRate === '' ? CONFIG.defaultTaxRate : rate;
+    q.subtotal = sub;
+    q.tax = Math.floor(sub * q.taxRate / 100);
+    q.total = q.subtotal + q.tax;
+    q.updated = nowStr();
+    if (!q.result) q.result = '未定';
+    if (!q.id) q.id = newId();
+    if (!q.created) { q.created = q.updated; q.author = ctx.email; }
+    if (!q.no) {
+      const ym = new Date(Date.now() + JST).toISOString().slice(0, 7).replace('-', '');
+      const { results } = await env.DB.prepare('SELECT "no" FROM "quotes" WHERE "no" LIKE ?').bind('Q' + ym + '-%').all();
+      let max = 0;
+      results.forEach(r => { const n = parseInt(String(r.no).split('-')[1], 10); if (n > max) max = n; });
+      q.no = 'Q' + ym + '-' + ('000' + (max + 1)).slice(-3);
+    }
+    const stmts = [upsertStmt(env, 'quotes', q), delStmt(env, 'lines', 'quoteId', q.id)];
+    ls.forEach(l => { l.quoteId = q.id; stmts.push(upsertStmt(env, 'lines', l)); });
+    await env.DB.batch(stmts);
+    return q;
+  },
+
+  // ----- 写真・PDF(D1に保存。token = ファイルID または ファイルID|pdf) -----
+  async uploadPhoto(env, ctx, requestId, dataUrl, name) {
+    const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
+    if (!m) throw fail('画像形式が不正です');
+    const isPdf = m[1] === 'application/pdf';
+    if (!isPdf && m[1].indexOf('image/') !== 0) throw fail('写真またはPDFのみ保存できます');
+    const r = (await readAll(env, 'requests', '"id" = ?', requestId))[0];
+    if (!r) throw fail('仕入先が見つかりません');
+    if (m[2].length > 8 * 1024 * 1024 * 4 / 3) throw fail('ファイルが大きすぎます（8MBまで）');
+    const id = newFileId();
+    await putFile(env, id, m[1], name, m[2]);
+    const token = isPdf ? id + '|pdf' : id;
+    const ids = String(r.photos || '').split(',').filter(Boolean);
+    ids.push(token);
+    await env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(ids.join(','), requestId).run();
+    return token;
+  },
+
+  async removePhoto(env, ctx, requestId, token) {
+    const r = (await readAll(env, 'requests', '"id" = ?', requestId))[0];
+    if (!r) return false;
+    const left = String(r.photos || '').split(',').filter(x => x && x !== token);
+    await env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), requestId).run();
+    try { await deleteFile(env, String(token).split('|')[0]); } catch (e) { /* 既に無い */ }
+    return true;
+  },
+
+  // ----- 出力 -----
+  async getQuoteBundle(env, ctx, quoteId) { return bundle(env, quoteId); },
+
+  async makePdf(env, ctx, quoteId) {
+    const b = await bundle(env, quoteId);
+    return { name: '見積書_' + b.q.no + '_' + (b.c.name || '') + '.pdf', html: quoteHtml(b) };
+  },
+
+  async makeRequestPdf(env, ctx, requestId) {
+    const r = (await readAll(env, 'requests', '"id" = ?', requestId))[0];
+    if (!r) throw fail('仕入先が見つかりません');
+    const p = (await readAll(env, 'projects', '"id" = ?', r.projectId))[0] || {};
+    const v = (await readAll(env, 'vendors', '"name" = ?', r.vendor))[0] || {};
+    return { name: '見積依頼書_' + r.vendor + '_' + (r.requestedOn || '') + '.pdf', html: requestHtml(r, p, v) };
+  },
+
+  // スマイルワークス取込用CSV。文字コード(Shift_JIS)への変換は画面側で行う
+  async makeCsv(env, ctx, quoteIds) {
+    const cell = v => { const s = String(v === undefined || v === null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const slash = d => String(d || '').replace(/-/g, '/');
+    const out = [CONFIG.csvColumns.map(c => cell(c[1])).join(',')];
+    const noCode = [];
+    for (const id of quoteIds) {
+      const b = await bundle(env, id);
+      if (!b.c.code && b.c.name && noCode.indexOf(b.c.name) < 0) noCode.push(b.c.name);
+      b.lines.forEach((l, i) => {
+        const v = {
+          issueDate: slash(b.q.issueDate), validUntil: slash(b.q.validUntil), no: b.q.no,
+          customerCode: b.c.code, customer: b.c.name, customerContact: b.c.contact,
+          subject: b.q.subject || b.p.name,
+          row: i + 1, item: l.item, qty: l.qty, unit: l.unit, price: l.price, note: l.note, cost: l.cost,
+        };
+        out.push(CONFIG.csvColumns.map(c => cell(c[0] ? v[c[0]] : '')).join(','));
+      });
+    }
+    const d = new Date(Date.now() + JST).toISOString();
+    return {
+      name: 'mitsumori_' + d.slice(0, 10).replace(/-/g, '') + '_' + d.slice(11, 16).replace(':', '') + '.csv',
+      text: out.join('\r\n') + '\r\n',
+      warn: noCode.length ? '得意先コードが未設定です: ' + noCode.join('、') + '\n顧客の編集画面で入力してください。' : '',
+    };
+  },
+
+  // スマイルワークスの得意先マスタCSVから取り込んだ顧客を一括登録(得意先コードが同じなら上書き)
+  async importCustomers(env, ctx, list) {
+    const cur = await readAll(env, 'customers');
+    const byCode = {};
+    cur.forEach(c => { if (c.code !== '') byCode[String(c.code)] = c; });
+    let added = 0, updated = 0;
+    const stmts = [];
+    for (const x of list || []) {
+      if (!x.code || !x.name) continue;
+      const code = String(x.code);
+      let row = byCode[code];
+      if (row) { updated++; }
+      else { row = { id: newId(), created: nowStr(), memo: '' }; added++; byCode[code] = row; }
+      Object.assign(row, { code: code, name: x.name || '', contact: x.contact || '', address: x.address || '', tel: x.tel || '', email: x.email || '' });
+      stmts.push(upsertStmt(env, 'customers', row));
+    }
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return { added: added, updated: updated };
+  },
+
+  // 手書きメモの文字起こし(Gemini)
+  async ocrImage(env, ctx, dataUrl) {
+    const m = /^data:(image\/.+?);base64,(.*)$/s.exec(dataUrl || '');
+    if (!m) throw fail('画像形式が不正です');
+    if (!env.GEMINI_API_KEY) return { text: '', engine: 'none', note: '文字起こしの設定（GEMINI_API_KEY）がまだ行われていません。管理者に連絡してください。' };
+    const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+    try {
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: GEMINI_PROMPT }, { inline_data: { mime_type: m[1], data: m[2] } }] }],
+          generationConfig: { temperature: 0 },
+        }),
+      });
+      if (!res.ok) throw new Error('Gemini ' + res.status + ': ' + (await res.text()).slice(0, 200));
+      const j = await res.json();
+      const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
+      return { text: parts.map(p => p.text || '').join('').trim(), engine: 'gemini' };
+    } catch (e) {
+      return { text: '', engine: 'none', note: '文字起こしに失敗しました。しばらくしてからもう一度お試しください。\n(' + String(e.message || e).slice(0, 160) + ')' };
+    }
+  },
+};
+
+const GEMINI_PROMPT = 'これは手書きのメモ(日本語)の写真です。書かれている文字を、見たとおりに文字起こししてください。' +
+  '改行・箇条書き・段落の区切りは元のメモに合わせ、表や矢印は文字で分かるように書いてください。' +
+  '推測で内容を足したり、要約や説明を付けたりしないでください。読み取れない部分は【判読不能】と書いてください。' +
+  '出力は文字起こしの本文だけにしてください。';
+
+async function bundle(env, quoteId) {
+  const q = (await readAll(env, 'quotes', '"id" = ?', quoteId))[0];
+  if (!q) throw fail('見積が見つかりません');
+  const lines = (await readAll(env, 'lines', '"quoteId" = ?', quoteId)).sort((a, b) => a.row - b.row);
+  const p = (await readAll(env, 'projects', '"id" = ?', q.projectId))[0] || {};
+  const c = (await readAll(env, 'customers', '"id" = ?', p.customerId))[0] || {};
+  return { q: q, lines: lines, p: p, c: c };
+}
+
+// ===== 受付 =====
+const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+
+    // 合言葉ログイン
+    if (request.method === 'POST' && url.pathname === '/api/login') {
+      let b = {}; try { b = await request.json(); } catch (e) {}
+      const cookie = await login(env, b.name, b.password);
+      if (!cookie) return json({ ok: false, error: '名前または合言葉が違います' }, 401);
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': cookie } });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/logout') {
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': 'sess=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' } });
+    }
+
+    const auth = await verifyAccess(request, env);
+    if (!auth.ok) return json({ ok: false, error: auth.error, login: !!auth.login }, 401);
+    const ctx = { email: auth.email || '' };
+
+    // 写真・PDFの表示
+    if (request.method === 'GET' && url.pathname.startsWith('/api/file/')) {
+      const id = url.pathname.slice('/api/file/'.length);
+      if (!/^[0-9a-f]{32}$/.test(id)) return new Response('not found', { status: 404 });
+      const obj = await getFile(env, id);
+      if (!obj) return new Response('not found', { status: 404 });
+      return new Response(obj.bytes, { headers: { 'content-type': obj.ctype || 'application/octet-stream', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+    }
+
+    // 機能の呼び出し: POST /api/rpc/<名前>  本文 {"args":[...]}
+    if (request.method === 'POST' && url.pathname.startsWith('/api/rpc/')) {
+      const fn = url.pathname.slice('/api/rpc/'.length);
+      if (!Object.prototype.hasOwnProperty.call(API, fn)) return json({ ok: false, error: '不明な操作です' }, 404);
+      try {
+        const body = await request.json();
+        const args = Array.isArray(body.args) ? body.args : [];
+        const result = await API[fn](env, ctx, ...args);
+        return json({ ok: true, result: result });
+      } catch (e) {
+        if (!e.app) console.error(fn, e && e.stack || e);
+        return json({ ok: false, error: e.app ? e.message : 'サーバーでエラーが起きました。もう一度お試しください。' });
+      }
+    }
+    return json({ ok: false, error: 'not found' }, 404);
+  },
+};
