@@ -48,10 +48,10 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
 const TABS = [['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
-function tabOf(n){ return n === 'memos' ? 'memos' : n === 'sales' ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport') ? '' : 'home'; }
+function tabOf(n){ return n === 'memos' ? 'memos' : n === 'sales' ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company') ? '' : 'home'; }
 function tbHtml(){
   const cur = tabOf(view.n);
   return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('');
@@ -65,7 +65,7 @@ async function reload(){
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -95,7 +95,7 @@ V.menu = () => {
   <div class="card click tile" data-sec="memos" onclick="go('memos')"><span class="ic">📝</span><b>メモ帳</b><div class="mute">問い合わせ・注文・連絡事項</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
   <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
   <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div></div>
-  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button></div>`;
+  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button></div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
@@ -107,6 +107,29 @@ const salesCur = () => {
 function salesCols(b){ // 表示する列(利用者が選んだもの。なければ初期値)
   try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
   return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
+}
+V.company = () => {
+  const c = DB.company || {};
+  const F = [['name', '会社名', 'text'], ['address', '住所（〒を含めて入力）', 'text'], ['tel', '電話番号（例: 0532-39-5311）', 'text'], ['fax', 'FAX番号（例: 0532-39-5312）', 'text'],
+    ['email', 'メールアドレス', 'text'], ['regNo', 'インボイス登録番号（例: T1234567890123）', 'text'],
+    ['bank', '振込先（見積書の下部に載せます）', 'area'], ['note', '見積書の下部に載せる文（支払条件・納期の目安など）', 'area']];
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button></div>
+  <h2><span>🏢 会社情報</span></h2>
+  <div class="card"><div class="mute" style="margin-bottom:4px">見積書・見積依頼書・Excelに載る、自社の情報です。空欄の項目は載りません。</div>
+  ${F.map(f => `<label>${f[1]}</label>` + (f[2] === 'area' ? `<textarea id="co_${f[0]}" rows="3">${esc(c[f[0]])}</textarea>` : `<input id="co_${f[0]}" value="${esc(c[f[0]])}">`)).join('')}
+  <div class="row" style="margin-top:14px"><button class="pri" onclick="saveCompany()">保存</button></div></div>
+  <div class="card"><b>見積書での載り方（見本）</b><div style="text-align:right;font-size:13px;margin-top:6px">${coPreview(c)}</div></div>`;
+};
+function coPreview(c){
+  const tf = [c.tel ? 'TEL ' + c.tel : '', c.fax ? 'FAX ' + c.fax : ''].filter(Boolean).join('　');
+  return `<b>${esc(c.name)}</b>${c.address ? '<br>' + esc(c.address) : ''}${tf ? '<br>' + esc(tf) : ''}${c.email ? '<br>' + esc(c.email) : ''}${c.regNo ? '<br>登録番号: ' + esc(c.regNo) : ''}`;
+}
+async function saveCompany(){
+  const o = {}; ['name', 'address', 'tel', 'fax', 'email', 'regNo', 'bank', 'note'].forEach(k => o[k] = $('#co_' + k).value.trim());
+  if (!o.name) return alert('会社名を入力してください');
+  DB.company = await run('saveCompany', o);
+  alert('保存しました。次に作る見積書から反映されます。');
+  render();
 }
 V.sales = () => {
   if (!SALES.batches) { loadSales(); return '<div class="card">読み込み中...</div>'; }
@@ -718,10 +741,11 @@ async function expCsv(id){
 }
 async function expXlsx(id){
   const b = await run('getQuoteBundle', id);
-  const aoa = [['御見積書'], [], ['宛先', (b.c.name || '') + ' 御中'], ['件名', b.q.subject], ['見積番号', b.q.no], ['発行日', b.q.issueDate], ['有効期限', b.q.validUntil], [],
+  const co = DB.company || {};
+  const aoa = [['御見積書'], [co.name || ''], [co.address || ''], [[co.tel ? 'TEL ' + co.tel : '', co.fax ? 'FAX ' + co.fax : ''].filter(Boolean).join('　')], [co.regNo ? '登録番号: ' + co.regNo : ''], ['宛先', (b.c.name || '') + ' 御中'], ['件名', b.q.subject], ['見積番号', b.q.no], ['発行日', b.q.issueDate], ['有効期限', b.q.validUntil], [],
     ['品名', '数量', '単位', '単価', '金額', '備考']]
     .concat(b.lines.map(l => [l.item, l.qty, l.unit, l.price, l.amount, l.note]))
-    .concat([[], ['', '', '', '小計', b.q.subtotal], ['', '', '', '消費税(' + b.q.taxRate + '%)', b.q.tax], ['', '', '', '合計', b.q.total], [], ['備考', b.q.note]]);
+    .concat([[], ['', '', '', '小計', b.q.subtotal], ['', '', '', '消費税(' + b.q.taxRate + '%)', b.q.tax], ['', '', '', '合計', b.q.total], [], ['備考', b.q.note]].concat(co.bank ? [['お振込先', co.bank]] : []).concat(co.note ? [['', co.note]] : []));
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:34},{wch:8},{wch:8},{wch:12},{wch:14},{wch:24}];
   Object.keys(ws).forEach(a => { if (a[0] !== '!' && ws[a].t === 'n' && a[0] !== 'B') ws[a].z = '#,##0'; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '見積書');

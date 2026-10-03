@@ -10,6 +10,7 @@ out.push('CREATE TABLE IF NOT EXISTS "file_chunks" (\n  "fid" TEXT NOT NULL,\n  
 out.push('CREATE TABLE IF NOT EXISTS "sales_batches" (\n  "id" TEXT PRIMARY KEY,\n  "name" TEXT,\n  "headers" TEXT,\n  "count" TEXT,\n  "created" TEXT,\n  "by" TEXT\n);');
 out.push('CREATE TABLE IF NOT EXISTS "sales_rows" (\n  "id" INTEGER PRIMARY KEY AUTOINCREMENT,\n  "batch" TEXT NOT NULL,\n  "seq" INTEGER,\n  "data" TEXT,\n  "search" TEXT\n);');
 out.push('CREATE INDEX IF NOT EXISTS idx_sales_rows_batch ON "sales_rows"("batch","seq");');
+out.push('CREATE TABLE IF NOT EXISTS "settings" (\n  "key" TEXT PRIMARY KEY,\n  "value" TEXT\n);');
 out.push('CREATE INDEX IF NOT EXISTS idx_lines_quote ON "lines"("quoteId");');
 out.push('CREATE INDEX IF NOT EXISTS idx_quotes_project ON "quotes"("projectId");');
 out.push('CREATE INDEX IF NOT EXISTS idx_requests_project ON "requests"("projectId");');

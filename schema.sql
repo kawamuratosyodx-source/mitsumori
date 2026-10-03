@@ -125,6 +125,11 @@ CREATE TABLE IF NOT EXISTS "sales_rows" (
 
 CREATE INDEX IF NOT EXISTS idx_sales_rows_batch ON "sales_rows"("batch","seq");
 
+CREATE TABLE IF NOT EXISTS "settings" (
+  "key" TEXT PRIMARY KEY,
+  "value" TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_lines_quote ON "lines"("quoteId");
 
 CREATE INDEX IF NOT EXISTS idx_quotes_project ON "quotes"("projectId");

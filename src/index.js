@@ -18,6 +18,16 @@ function salesMeta(raw) {
   return { h: m.h || [], show: m.show || [], scols: m.scols || [], dcol: Number.isInteger(m.dcol) ? m.dcol : -1, scol: Number.isInteger(m.scol) ? m.scol : -1 };
 }
 
+// 会社情報: 画面で保存した内容を優先し、なければ config.js の初期値を使う
+async function getCompany(env) {
+  const base = Object.assign({}, CONFIG.company);
+  try {
+    const r = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('company').first();
+    if (r && r.value) { const v = JSON.parse(r.value); for (const k of Object.keys(base)) if (v[k] != null) base[k] = String(v[k]); }
+  } catch (e) { /* 表がまだ無い場合は初期値 */ }
+  return base;
+}
+
 // ===== D1の読み書き =====
 function conv(key, r) {
   const o = {};
@@ -78,9 +88,21 @@ function fail(msg) { const e = new Error(msg); e.app = true; return e; }
 const API = {
   async getAll(env) {
     const o = {};
+    o.company = await getCompany(env);
     for (const k of Object.keys(TABLES)) o[k] = await readAll(env, k);
     o.dbUrl = '';
     return o;
+  },
+
+  // 会社情報(見積書などに載る自社の情報)
+  async getCompany(env) { return getCompany(env); },
+  async saveCompany(env, ctx, obj) {
+    const out = {};
+    for (const k of Object.keys(CONFIG.company)) out[k] = String((obj && obj[k]) == null ? '' : obj[k]).slice(0, 500);
+    if (!out.name.trim()) throw fail('会社名を入力してください');
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS "settings" ("key" TEXT PRIMARY KEY, "value" TEXT)').run();
+    await env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('company', JSON.stringify(out)).run();
+    return out;
   },
 
   async save(env, ctx, key, obj) {
@@ -187,7 +209,7 @@ const API = {
 
   async makePdf(env, ctx, quoteId) {
     const b = await bundle(env, quoteId);
-    return { name: '見積書_' + b.q.no + '_' + (b.c.name || '') + '.pdf', html: quoteHtml(b) };
+    return { name: '見積書_' + b.q.no + '_' + (b.c.name || '') + '.pdf', html: quoteHtml(b, await getCompany(env)) };
   },
 
   async makeRequestPdf(env, ctx, requestId) {
@@ -195,7 +217,7 @@ const API = {
     if (!r) throw fail('仕入先が見つかりません');
     const p = (await readAll(env, 'projects', '"id" = ?', r.projectId))[0] || {};
     const v = (await readAll(env, 'vendors', '"name" = ?', r.vendor))[0] || {};
-    return { name: '見積依頼書_' + r.vendor + '_' + (r.requestedOn || '') + '.pdf', html: requestHtml(r, p, v) };
+    return { name: '見積依頼書_' + r.vendor + '_' + (r.requestedOn || '') + '.pdf', html: requestHtml(r, p, v, await getCompany(env)) };
   },
 
   // スマイルワークス取込用CSV。文字コード(Shift_JIS)への変換は画面側で行う
