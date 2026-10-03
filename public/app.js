@@ -90,7 +90,11 @@ V.menu = () => {
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
-const salesCur = () => (SALES.batches || []).find(b => b.id === view.b);
+const salesCur = () => {
+  const bs = SALES.batches || [];
+  if (view.b === '*' && bs.length) return Object.assign({}, bs[0], {id: '*', name: 'すべて', count: bs.reduce((a, x) => a + x.count, 0)});
+  return bs.find(b => b.id === view.b);
+};
 function salesCols(b){ // 表示する列(利用者が選んだもの。なければ初期値)
   try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
   return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
@@ -105,8 +109,8 @@ V.sales = () => {
   return `<div class="row" style="margin-bottom:8px"><button onclick="go('menu')">← メニュー</button><span class="sp"></span></div>
   <h2><span>💴 売上データ</span></h2>
   ${bs.length ? `<div class="card"><label style="margin-top:0">検索するデータ</label>
-    <div class="row"><select id="sb" style="flex:1" onchange="view.b=this.value;view.sq='';view.off=0;view.dcol=null;SALES.res=null;go('sales')">${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}件・${esc(b.created)}）</option>`).join('')}</select>
-    <button class="dng" onclick="delSales()">削除</button></div>
+    <div class="row"><select id="sb" style="flex:1" onchange="SALES.res=null;go('sales',{b:this.value})">${bs.length > 1 ? `<option value="*"${view.b === '*' ? ' selected' : ''}>★ すべて（月をまたいで検索）</option>` : ''}${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}件・${esc(b.created)}）</option>`).join('')}</select>
+    <button class="dng" onclick="delSales()" ${view.b === '*' ? 'disabled' : ''}>削除</button></div>
     <label>検索（空白で区切ると、すべてを含む行だけ表示）</label>
     <input id="sq" value="${esc(view.sq || '')}" placeholder="得意先名・商品名・金額など" oninput="salesQ()">
     <div class="g" style="grid-template-columns:1fr 1fr;margin-top:6px">
@@ -157,10 +161,13 @@ function salesResHtml(){
   const isMoney = i => /(金額|単価|額|合計|税|原価|粗利|売上|仕入|利益|送料|値引|返品)/.test(H[i]) && !/(コード|番号|日|率|区分|方法|状態)/.test(H[i]);
   const from = r.total ? r.offset + 1 : 0, to = r.offset + r.rows.length;
   const cell = (row, i) => { const v = row[i] == null ? '' : row[i]; if (isMoney(i)) { const n = String(v).replace(/,/g, ''); return `<td class="n">${esc(n !== '' && !isNaN(Number(n)) ? fmtNum(String(Number(n))) : v)}</td>`; } return `<td>${esc(v)}</td>`; };
+  const all = view.b === '*';
   const sumTxt = r.sum != null && view.scol >= 0 ? `　／　「${esc(H[view.scol])}」の合計 <b>${esc(fmtNum(String(Math.round(r.sum * 100) / 100)))}</b>` : '';
   return `<div class="mute" style="margin:6px 0">${r.total}件中 ${from}〜${to}件を表示${sumTxt}</div>
-  <div style="overflow:auto;background:#fff;border-radius:8px;max-height:70vh"><table style="border-collapse:collapse;font-size:13px;white-space:nowrap"><thead><tr>${cols.map(i => `<th style="background:#eef1f5;text-align:left;position:sticky;top:0">${esc(H[i])}</th>`).join('')}</tr></thead><tbody>${
-    r.rows.map(row => '<tr>' + cols.map(i => cell(row, i)).join('') + '</tr>').join('') || `<tr><td colspan="${cols.length}" class="mute">該当するデータがありません</td></tr>`}</tbody></table></div>
+  <div style="overflow:auto;background:#fff;border-radius:8px;max-height:70vh"><table style="border-collapse:collapse;font-size:13px;white-space:nowrap"><thead><tr>${all ? '<th style="background:#eef1f5;text-align:left;position:sticky;top:0">データ名</th>' : ''}${cols.map(i => `<th style="background:#eef1f5;text-align:left;position:sticky;top:0">${esc(H[i])}</th>`).join('')}</tr></thead><tbody>${
+    r.rows.map((row, k) => '<tr>' + (all ? `<td>${esc((r.names || [])[k])}</td>` : '') + cols.map(i => cell(row, i)).join('') + '</tr>').join('') || `<tr><td colspan="${cols.length + 1}" class="mute">該当するデータがありません</td></tr>`}</tbody></table></div>
+  ${all && r.skipped ? `<div class="mute">※見出しの形式が違う ${r.skipped}件のデータは、この検索に含まれません。個別に選んで検索してください。</div>` : ''}
+  ${all ? '<div class="mute">※同じ期間のデータを重ねて取り込んでいると、二重に数えられます。</div>' : ''}
   <div class="row" style="margin:10px 0"><button ${r.offset <= 0 ? 'disabled' : ''} onclick="salesPage(-${r.limit})">← 前の${r.limit}件</button><button ${to >= r.total ? 'disabled' : ''} onclick="salesPage(${r.limit})">次の${r.limit}件 →</button></div>`;
 }
 // 取り込み時に、表示する列・検索に使う列・日付列・金額列を見出しとデータから決める
@@ -180,6 +187,7 @@ function salesPlan(head, data){
   const scol = find(['販売額', '金額'], /(販売額|金額|売上額)/);
   return {h: head, show: show, scols: scols, dcol: dcol, scol: scol};
 }
+let SALES_NEW = null;
 async function importSales(inp){
   const file = inp.files[0]; inp.value = ''; if (!file) return;
   const name = ($('#sname').value || '').trim() || file.name.replace(/\.[^.]+$/, '');
@@ -199,16 +207,16 @@ async function importSales(inp){
       await run('salesAdd', id, i, data.slice(i, i + 200));
     }
     await run('salesFinish', id);
-    view.b = id; view.sq = ''; view.off = 0; view.from = view.to = ''; view.dcol = null; SALES = {batches: null, res: null};
+    SALES_NEW = id; SALES = {batches: null, res: null};
     alert('取り込みました（' + data.length + '件）');
   } finally { busy(-1); $('#busy').textContent = '処理中...'; }
-  go('sales');
+  go('sales', {b: SALES_NEW});
 }
 async function delSales(){
   const b = salesCur();
-  if (!b || !confirm('「' + b.name + '」（' + b.count + '件）を削除します。よろしいですか？')) return;
+  if (!b || b.id === '*' || !confirm('「' + b.name + '」（' + b.count + '件）を削除します。よろしいですか？')) return;
   await run('salesDelete', b.id);
-  view.b = null; view.dcol = null; SALES = {batches: null, res: null}; go('sales');
+  SALES = {batches: null, res: null}; go('sales');
 }
 V.report = () => {
   const won = q => q.result === '受注', lost = q => q.result === '失注';

@@ -293,23 +293,32 @@ const API = {
     return true;
   },
   // opt: {dcol, from, to, scol}  日付列での期間絞り込みと、金額列の合計
+  // batchId が '*' のときは、最新のデータと見出しが同じすべてのデータをまたいで検索する
   async salesSearch(env, ctx, batchId, q, offset, opt) {
     opt = opt || {};
+    let ids = [String(batchId)], skipped = 0;
+    if (batchId === '*') {
+      const all = (await env.DB.prepare('SELECT id,headers FROM sales_batches ORDER BY created DESC, id DESC').all()).results || [];
+      if (!all.length) return { total: 0, sum: null, offset: 0, limit: 100, rows: [], names: [], skipped: 0 };
+      const key = salesMeta(all[0].headers).h.join('\u0001');
+      ids = all.filter(x => salesMeta(x.headers).h.join('\u0001') === key).map(x => x.id);
+      skipped = all.length - ids.length;
+    }
     const terms = normSearch(q).split(/\s+/).filter(Boolean).slice(0, 8);
-    let where = 'batch = ?'; const binds = [String(batchId)];
-    for (const t of terms) { where += " AND search LIKE ? ESCAPE '\\'"; binds.push('%' + t.replace(/[\\%_]/g, m => '\\' + m) + '%'); }
+    let where = 'r.batch IN (' + ids.map(() => '?').join(',') + ')'; const binds = ids.slice();
+    for (const t of terms) { where += " AND r.search LIKE ? ESCAPE '\\'"; binds.push('%' + t.replace(/[\\%_]/g, m => '\\' + m) + '%'); }
     const dcol = Number(opt.dcol), scol = Number(opt.scol);
     const ymd = v => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(String(v || '').trim()); return m ? m[1] + '/' + m[2].padStart(2, '0') + '/' + m[3].padStart(2, '0') : ''; };
     if (Number.isInteger(dcol) && dcol >= 0 && dcol < 300) {
       const f = ymd(opt.from), t = ymd(opt.to);
-      if (f) { where += ` AND json_extract(data,'$[${dcol}]') >= ?`; binds.push(f); }
-      if (t) { where += ` AND json_extract(data,'$[${dcol}]') <= ?`; binds.push(t); }
+      if (f) { where += ` AND json_extract(r.data,'$[${dcol}]') >= ?`; binds.push(f); }
+      if (t) { where += ` AND json_extract(r.data,'$[${dcol}]') <= ?`; binds.push(t); }
     }
     const off = Math.max(0, Number(offset) || 0), LIM = 100;
-    const sumExpr = Number.isInteger(scol) && scol >= 0 && scol < 300 ? `, SUM(CAST(REPLACE(json_extract(data,'$[${scol}]'),',','') AS REAL)) AS s` : '';
-    const agg = await env.DB.prepare('SELECT COUNT(*) AS n' + sumExpr + ' FROM sales_rows WHERE ' + where).bind(...binds).first();
-    const r = await env.DB.prepare('SELECT data FROM sales_rows WHERE ' + where + ' ORDER BY seq LIMIT ' + LIM + ' OFFSET ' + off).bind(...binds).all();
-    return { total: agg.n, sum: sumExpr ? (agg.s == null ? 0 : agg.s) : null, offset: off, limit: LIM, rows: (r.results || []).map(x => JSON.parse(x.data)) };
+    const sumExpr = Number.isInteger(scol) && scol >= 0 && scol < 300 ? `, SUM(CAST(REPLACE(json_extract(r.data,'$[${scol}]'),',','') AS REAL)) AS s` : '';
+    const agg = await env.DB.prepare('SELECT COUNT(*) AS n' + sumExpr + ' FROM sales_rows r WHERE ' + where).bind(...binds).first();
+    const r = await env.DB.prepare('SELECT r.data AS data, b.name AS name FROM sales_rows r JOIN sales_batches b ON b.id = r.batch WHERE ' + where + ' ORDER BY b.created, r.batch, r.seq LIMIT ' + LIM + ' OFFSET ' + off).bind(...binds).all();
+    return { total: agg.n, sum: sumExpr ? (agg.s == null ? 0 : agg.s) : null, offset: off, limit: LIM, rows: (r.results || []).map(x => JSON.parse(x.data)), names: (r.results || []).map(x => x.name), skipped: skipped };
   },
 
   // 手書きメモの文字起こし(Gemini)
