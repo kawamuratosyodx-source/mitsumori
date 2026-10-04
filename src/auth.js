@@ -1,3 +1,4 @@
+// 業務管理 河村図書教材社  v2.1.1  (2026-10-04)
 // Cloudflare Access のログイン確認。ACCESS_TEAM_DOMAIN と ACCESS_AUD が設定されているときだけ検証する。
 // 未設定のまま公開すると全員が使えてしまうため、未設定のときは(開発用の ALLOW_NO_AUTH=1 がない限り)すべて拒否する
 function b64urlToBytes(s) {
