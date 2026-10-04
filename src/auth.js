@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
 // Cloudflare Access のログイン確認。ACCESS_TEAM_DOMAIN と ACCESS_AUD が設定されているときだけ検証する。
 // 未設定のまま公開すると全員が使えてしまうため、未設定のときは(開発用の ALLOW_NO_AUTH=1 がない限り)すべて拒否する
 function b64urlToBytes(s) {
@@ -56,6 +56,9 @@ export function _resetJwksCache() { jwksCache = { at: 0, keys: null }; }
 const enc = new TextEncoder();
 const SESSION_DAYS = 30;
 export const ADMIN_NAME = '管理者';
+// 管理者として入れるお名前(管理者用の合言葉が必要)。これらの名前は、みんなで使う合言葉では入れない
+export const ADMIN_NAMES = ['管理者', '榮倉', '栄倉', '西川'];
+const isAdminName = n => ADMIN_NAMES.includes(String(n || '').replace(/[\s\u3000]/g, ''));
 // 初期の管理者用合言葉の暗号化値(元の文字は含まない)。管理者が画面で変更すると、そちらが優先される
 const ADMIN_DEFAULT = 'p1:WBzlfYVZkxUW_QkYhq4zng:OmcWUMg6Vaz9dQ1hnfa3Z_m75I8VlKjHrGAUUgYeNkw';
 function bytesToB64url(u8) { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
@@ -120,8 +123,8 @@ export async function login(env, name, password) {
   await new Promise(r => setTimeout(r, 800)); // 総当たり対策の待ち
   const who = String(name || '').trim().slice(0, 30) || '利用者';
   const sec = await getSecurity(env);
-  const admin = who === ADMIN_NAME;
-  // 「管理者」の名前は管理者用の合言葉でしか使えない(共通の合言葉で管理者になりすませない)
+  const admin = isAdminName(who);
+  // 管理者の名前は管理者用の合言葉でしか使えない(共通の合言葉で管理者になりすませない)
   if (admin ? !(await checkAdmin(env, sec, password)) : !(await checkCommon(env, sec, password))) return null;
   const exp = Date.now() + SESSION_DAYS * 86400000;
   const b = bytesToB64url(enc.encode(exp + '|' + (admin ? 'a' : 'u') + '|' + who));

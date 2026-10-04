@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
 import { CONFIG } from './config.js';
 
 export const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));

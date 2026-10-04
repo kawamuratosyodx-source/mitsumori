@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -97,7 +97,60 @@ const API = {
   },
 
   // 会社情報(見積書などに載る自社の情報)
+  // 保存容量(管理者のみ)。無料枠はD1の1データベースあたり500MB
+  async getStorage(env, ctx) {
+    if (!ctx.admin) throw fail('保存容量を見られるのは管理者だけです');
+    const one = async (sql) => (await env.DB.prepare(sql).first()) || {};
+    const t = await env.DB.prepare('SELECT 1 AS x').all();
+    const dbBytes = Number(t.meta && t.meta.size_after) || 0;
+    const f = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CAST("size" AS INTEGER)),0) AS b FROM "files"');
+    const sr = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH("data")+LENGTH("search")),0) AS b FROM "sales_rows"');
+    const sb = await one('SELECT COUNT(*) AS n FROM "sales_batches"');
+    let logs = 0; try { logs = (await one('SELECT COUNT(*) AS n FROM "logs"')).n || 0; } catch (e) {}
+    return { dbBytes: dbBytes, limit: 500 * 1024 * 1024, files: { n: f.n || 0, bytes: Math.round((Number(f.b) || 0) * 4 / 3) },
+      sales: { batches: sb.n || 0, rows: sr.n || 0, bytes: Number(sr.b) || 0 }, logs: logs };
+  },
+  // 仕入先に保存してある写真・PDFの一覧(古い順)。管理者のみ
+  async listFiles(env, ctx) {
+    if (!ctx.admin) throw fail('管理者だけが使えます');
+    const reqs = await readAll(env, 'requests');
+    const projs = {}; for (const p of await readAll(env, 'projects')) projs[p.id] = p;
+    const fr = (await env.DB.prepare('SELECT "id","ctype","name","size","created" FROM "files"').all()).results || [];
+    const fm = {}; for (const x of fr) fm[x.id] = x;
+    const used = new Set(), out = [];
+    for (const r of reqs) for (const tk of String(r.photos || '').split(',').filter(Boolean)) {
+      const id = tk.split('|')[0], x = fm[id]; used.add(id);
+      if (!x) continue;
+      out.push({ id: id, created: x.created, kind: tk.endsWith('|pdf') ? 'PDF' : '写真', size: Math.round(Number(x.size) || 0), vendor: r.vendor, project: (projs[r.projectId] || {}).name || '' });
+    }
+    for (const x of fr) if (!used.has(x.id)) out.push({ id: x.id, created: x.created, kind: '未使用', size: Math.round(Number(x.size) || 0), vendor: '', project: '' });
+    out.sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    return out;
+  },
+  // 指定した日より前に保存した写真・PDFを、まとめて削除する(管理者のみ)
+  async purgeFiles(env, ctx, before) {
+    if (!ctx.admin) throw fail('管理者だけが使えます');
+    before = String(before || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(before)) throw fail('日付を指定してください');
+    const fr = (await env.DB.prepare('SELECT "id","size" FROM "files" WHERE "created" < ?').bind(before).all()).results || [];
+    if (!fr.length) return { n: 0, bytes: 0 };
+    const gone = new Set(fr.map(x => x.id));
+    for (const r of await readAll(env, 'requests')) {
+      const toks = String(r.photos || '').split(',').filter(Boolean);
+      const left = toks.filter(tk => !gone.has(tk.split('|')[0]));
+      if (left.length !== toks.length) await env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), r.id).run();
+    }
+    let bytes = 0;
+    for (let i = 0; i < fr.length; i += 20) {
+      const part = fr.slice(i, i + 20), st = [];
+      for (const x of part) { bytes += Math.round(Number(x.size) || 0); st.push(env.DB.prepare('DELETE FROM "file_chunks" WHERE "fid" = ?').bind(x.id), env.DB.prepare('DELETE FROM "files" WHERE "id" = ?').bind(x.id)); }
+      await env.DB.batch(st);
+    }
+    await writeLog(env, ctx.email, 'op', '一括削除', '回答の写真・PDF ' + before + 'より前 ' + fr.length + '件', '');
+    return { n: fr.length, bytes: bytes };
+  },
   async getLogs(env, ctx, opt) {
+    if (!ctx.admin) throw fail('操作履歴を見られるのは管理者だけです');
     await ensureLogs(env);
     opt = opt || {};
     const w = [], b = [];

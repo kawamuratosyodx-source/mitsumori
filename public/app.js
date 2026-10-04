@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -51,13 +51,20 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
-const TABS = [['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
-function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs') ? '' : 'home'; }
+const TABS = [['menu', '🏠 メニュー'], ['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
+function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage') ? '' : 'home'; }
 function tbHtml(){
-  const cur = tabOf(view.n);
-  return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('');
+  const cur = view.n === 'menu' ? 'menu' : tabOf(view.n);
+  const me = DB && DB.me ? DB.me : null;
+  return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('') + `<div class="tg out"><a href="#" onclick="return doLogout()" title="${me ? esc(me.name) + ' としてログイン中' : ''}">${me ? '👤 ' + esc(me.name) + '　' : ''}ログアウト</a></div>`;
+}
+async function doLogout(){
+  if (!confirm('ログアウトします。よろしいですか？')) return false;
+  try { await fetch('/api/logout', {method: 'POST'}); } catch (e) {}
+  AUTH = false; try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  showLogin(); return false;
 }
 // 通常のクリックはアプリ内で切り替え、Ctrl/⌘/Shift+クリックや中クリックはブラウザの新しいタブで開く
 function tbGo(e, n){ if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return true; go(n); return false; }
@@ -68,7 +75,7 @@ async function reload(){
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' || view.n === 'storage' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -98,7 +105,7 @@ V.menu = () => {
   <div class="card click tile" data-sec="memos" onclick="go('memos')"><span class="ic">📝</span><b>メモ帳</b><div class="mute">問い合わせ・注文・連絡事項</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
   <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
   <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div></div>
-  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button><button class="mbtn" onclick="go('logs')">操作履歴</button></div>`;
+  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button>${DB.me && DB.me.admin ? `<button class="mbtn" onclick="go('logs')">操作履歴</button><button class="mbtn" onclick="go('storage')">保存容量</button>` : ''}</div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
@@ -111,6 +118,53 @@ function salesCols(b){ // 表示する列(利用者が選んだもの。なけ�
   try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
   return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
 }
+const ST = {info: null, files: null};
+const fmtB = n => n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+async function loadStorage(){
+  try { ST.info = await run('getStorage'); ST.files = await run('listFiles'); } catch (e) { return; }
+  if (view.n === 'storage') render();
+}
+function purgeCut(){ const el = $('#pg_date'); return el ? el.value : ''; }
+function purgePreview(){
+  const c = purgeCut(), t = $('#pg_prev'); if (!t) return;
+  const hit = (ST.files || []).filter(f => c && String(f.created).slice(0, 10) < c);
+  t.textContent = c ? c + ' より前: ' + hit.length + '件（約 ' + fmtB(hit.reduce((s, f) => s + f.size, 0)) + '）が削除されます' : '日付を選んでください';
+  const b = $('#pg_btn'); if (b) b.disabled = !hit.length;
+}
+async function purgeNow(){
+  const c = purgeCut(); const hit = (ST.files || []).filter(f => c && String(f.created).slice(0, 10) < c);
+  if (!hit.length) return;
+  if (!confirm(c + ' より前に保存した写真・PDF（' + hit.length + '件）を削除します。\n削除したものは元に戻せません。よろしいですか？')) return;
+  const r = await run('purgeFiles', c);
+  alert(r.n + '件（約 ' + fmtB(r.bytes) + '）を削除しました。');
+  ST.info = null; ST.files = null; render();
+}
+V.storage = () => {
+  const back = `<div class="bar"><button onclick="go('menu')">← メニュー</button></div><h2><span>💾 保存容量</span></h2>`;
+  setTimeout(purgePreview, 0);
+  if (!(DB.me && DB.me.admin)) return back + '<div class="card">保存容量を見られるのは管理者だけです。</div>';
+  if (!ST.info) { loadStorage(); return back + '<div class="card">読み込み中...</div>'; }
+  const i = ST.info, pct = Math.min(100, i.dbBytes / i.limit * 100), left = Math.max(0, i.limit - i.dbBytes);
+  const col = pct >= 90 ? '#b42318' : pct >= 70 ? '#e07b00' : 'var(--c)';
+  const other = Math.max(0, i.dbBytes - i.files.bytes - i.sales.bytes);
+  const fl = ST.files || [], oldest = fl.length ? String(fl[0].created).slice(0, 10) : '';
+  const d0 = new Date(Date.now() + 9 * 3600e3); d0.setUTCFullYear(d0.getUTCFullYear() - 1);
+  return back + `<div class="card"><b>データベースの使用量</b>
+    <div style="margin:8px 0 4px;font-size:22px"><b>${fmtB(i.dbBytes)}</b> <span class="mute" style="font-size:14px">/ ${fmtB(i.limit)}（${pct.toFixed(1)}%）</span></div>
+    <div style="height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${col}"></div></div>
+    <div style="margin-top:6px">無料で使える残り: <b style="color:${col}">約 ${fmtB(left)}</b></div>
+    <table style="width:100%;margin-top:10px;font-size:14px"><tr><td>📎 回答の写真・PDF（${i.files.n}件）</td><td class="n">${fmtB(i.files.bytes)}</td></tr>
+    <tr><td>💴 売上データ（${i.sales.batches}件・${i.sales.rows}行）</td><td class="n">${fmtB(i.sales.bytes)}</td></tr>
+    <tr><td>その他（メモ・案件・見積・操作履歴${i.logs}件など）</td><td class="n">${fmtB(other)}</td></tr></table>
+    <div class="mute" style="margin-top:8px">無料プランは、1つのデータベースが500MBまでです（Cloudflareの無料枠）。上限に近づくと、保存や取り込みができなくなります。1日あたりの読み書きの回数の上限（読み取り500万行／書き込み10万行）は、このアプリの使い方ではほぼ届きません。回数はCloudflareの管理画面で確認できます。</div></div>
+  <div class="card"><b>過去の写真・PDFをまとめて削除</b>
+    <div class="mute" style="margin:4px 0">仕入先の回答に保存した写真・PDFが対象です。見積書や案件、メモは消えません。削除したものは戻せません。${oldest ? '一番古いのは ' + oldest + ' です。' : '保存されたファイルはありません。'}</div>
+    <label>この日より前に保存したものを削除</label><input id="pg_date" type="date" value="${d0.toISOString().slice(0, 10)}" oninput="purgePreview()">
+    <div id="pg_prev" style="margin-top:8px;font-weight:700"></div>
+    <div class="row" style="margin-top:10px"><button class="dng" id="pg_btn" onclick="purgeNow()">まとめて削除</button></div>
+    <div class="mute" style="margin-top:6px">削除してもグラフの数字がすぐには減らないことがあります（空いた場所は、このあと再利用されます）。</div></div>
+  ${fl.length ? `<div class="card"><b>保存されているファイル（古い順・先頭50件）</b><div style="overflow:auto"><table style="width:100%;font-size:13px"><tr><th>保存日</th><th>種類</th><th>仕入先</th><th>案件</th><th class="n">大きさ</th></tr>${fl.slice(0, 50).map(f => `<tr><td style="white-space:nowrap">${esc(String(f.created).slice(0, 10))}</td><td>${esc(f.kind)}</td><td>${esc(f.vendor)}</td><td>${esc(f.project)}</td><td class="n" style="white-space:nowrap">${fmtB(f.size)}</td></tr>`).join('')}</table></div></div>` : ''}`;
+};
 const LOGS = {rows: [], more: false, kind: '', q: '', loading: false};
 async function loadLogs(more){
   if (LOGS.loading) return; LOGS.loading = true;
@@ -128,6 +182,7 @@ function logsHtml(){
   return rows ? `<div style="overflow:auto"><table class="tbl" style="width:100%;font-size:13px"><tr><th>日時</th><th>お名前</th><th>操作</th><th>内容</th></tr>${rows}</table></div>` + (LOGS.more ? `<div class="row" style="margin-top:8px"><button onclick="loadLogs(true)">さらに100件表示</button></div>` : '') : '<p class="mute">記録はありません</p>';
 }
 V.logs = () => {
+  if (!(DB.me && DB.me.admin)) return `<div class="bar"><button onclick="go('menu')">← メニュー</button></div><div class="card">操作履歴を見られるのは管理者だけです。</div>`;
   setTimeout(() => loadLogs(false), 0);
   return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span></div>
   <h2><span>操作履歴（ログイン・操作）</span></h2>

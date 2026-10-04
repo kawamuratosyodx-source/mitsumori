@@ -34,7 +34,7 @@ header{background:var(--c);transition:background .2s;color:#fff;padding:10px 14p
 nav#tb{background:var(--cd);display:flex;gap:6px;padding:6px 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
 nav#tb .tg{display:flex;flex:none;border-radius:8px;background:rgba(255,255,255,.14);overflow:hidden;box-shadow:inset 0 -3px 0 var(--tc)}
 nav#tb .tg.on{background:var(--tc);box-shadow:0 0 0 2px #fff}
-nav#tb .tg[data-sec=memos]{--tc:#e07b00}nav#tb .tg[data-sec=home]{--tc:#1f6feb}nav#tb .tg[data-sec=sales]{--tc:#1a9b6c}
+nav#tb .tg[data-sec=menu]{--tc:#5b6b82}nav#tb .tg.out{margin-left:auto;background:rgba(255,255,255,.08);box-shadow:none}nav#tb .tg.out a{font-size:13px}nav#tb .tg[data-sec=memos]{--tc:#e07b00}nav#tb .tg[data-sec=home]{--tc:#1f6feb}nav#tb .tg[data-sec=sales]{--tc:#1a9b6c}
 nav#tb a{color:#fff;text-decoration:none;font-size:14px;padding:7px 12px;white-space:nowrap;display:block}
 nav#tb a.x{padding:7px 9px;font-size:12px;opacity:.75;border-left:1px solid rgba(255,255,255,.2)}
 nav#tb a:hover{background:rgba(255,255,255,.15)}
@@ -86,11 +86,11 @@ body.noauth #tb{display:none}
 </style>
 </head>
 <body>
-<div id="top"><header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2.4.0</span><button onclick="reload()">更新</button></header>
+<div id="top"><header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2.6.0</span><button onclick="reload()">更新</button></header>
 <nav id="tb"></nav></div>
 <main id="app">読み込み中...</main>
 <div id="ov"><img id="ovimg"><div id="pdfbox"></div><div class="row"><button id="ovdl" style="display:none">PDFをダウンロード</button><button id="ovdel" class="dng">削除</button><button onclick="closeOv()">閉じる</button></div></div>
 <div id="busy">処理中...</div>
-<script src="/app.js?v=2.4.0" defer></script>
+<script src="/app.js?v=2.6.0" defer></script>
 </body>
 </html>
