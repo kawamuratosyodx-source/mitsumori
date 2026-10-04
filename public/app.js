@@ -15,6 +15,7 @@ function numIn(el, ev){
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 let busyN = 0;
 function busy(d){ busyN += d; $('#busy').style.display = busyN > 0 ? 'block' : 'none'; }
+let AUTH = false; // ログイン済みか(サーバーからデータを受け取れたら true)
 async function run(fn, ...a){
   busy(1);
   try {
@@ -22,7 +23,7 @@ async function run(fn, ...a){
     let j = null;
     try { j = await res.json(); } catch (e) { /* 下で処理 */ }
     if (!j) throw new Error('サーバーから正しい応答がありません。ページを開き直してください（ログインの有効期限が切れた可能性があります）。');
-    if (!j.ok && j.login) { showLogin(); const er = new Error('ログインが必要です'); er.silent = true; throw er; }
+    if (!j.ok && j.login) { AUTH = false; showLogin(); const er = new Error('ログインが必要です'); er.silent = true; throw er; }
     if (!j.ok) throw new Error(j.error || 'エラーが起きました');
     return j.result;
   } catch (e) {
@@ -32,6 +33,7 @@ async function run(fn, ...a){
   } finally { busy(-1); }
 }
 function showLogin(){
+  document.body.classList.add('noauth'); document.body.dataset.sec = 'menu'; const tb = $('#tb'); if (tb) tb.innerHTML = ''; DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[],company:DB && DB.company ? {name: ''} : null}; SALES = {batches: null, res: null};
   $('#app').innerHTML = '<div class="card" style="max-width:360px;margin:30px auto"><b style="font-size:17px">ログイン</b><label>お名前</label><input id="lgn" autocomplete="username"><label>合言葉</label><input id="lgp" type="password" autocomplete="current-password"><div id="lge" style="color:#b42318;margin-top:8px"></div><div style="margin-top:12px"><button class="pri" id="lgb">ログイン</button></div></div>';
   const go1 = async () => {
     $('#lge').textContent = ''; $('#lgb').disabled = true;
@@ -48,10 +50,10 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
 const TABS = [['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
-function tabOf(n){ return n === 'memos' ? 'memos' : n === 'sales' ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company') ? '' : 'home'; }
+function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company') ? '' : 'home'; }
 function tbHtml(){
   const cur = tabOf(view.n);
   return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('');
@@ -60,12 +62,12 @@ function tbHtml(){
 function tbGo(e, n){ if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return true; go(n); return false; }
 const V = {};
 async function reload(){
-  try { DB = await run('getAll'); render(); }
+  try { DB = await run('getAll'); AUTH = true; render(); }
   catch (e) { if (e && e.silent) return; $('#app').innerHTML = '<div class="card"><b>データの読み込みに失敗しました</b><div class="mute" style="margin:8px 0;white-space:pre-wrap">' + esc((e && e.message) || e) + '</div><button onclick="reload()">再読み込み</button></div>'; }
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -131,6 +133,49 @@ async function saveCompany(){
   alert('保存しました。次に作る見積書から反映されます。');
   render();
 }
+V.salestax = () => {
+  if (!SALES.batches) { loadSales3(); return '<div class="card">読み込み中...</div>'; }
+  const bs = SALES.batches;
+  if (view.b == null || (view.b !== '*' && !bs.find(b => b.id === view.b))) view.b = bs.length ? bs[0].id : '';
+  if (!bs.length) return `<div class="bar"><button onclick="go('sales')">← 売上データ検索</button></div><div class="card"><p class="mute" style="margin:0 0 8px">まだ売上データがありません。マスタの「売上データ取込」からCSVを取り込んでください。</p><button class="pri" onclick="go('salesimport')">売上データを取り込む</button></div>`;
+  if (view.tax === undefined || view.taxFor !== view.b) { view.tax = null; view.taxFor = view.b; loadTax(); }
+  return `<div class="bar"><button onclick="go('sales',{b:view.b})">← 売上データ検索</button></div>
+  <h2><span>📊 税率別の売上高</span></h2>
+  <div class="card"><label style="margin-top:0">集計するデータ</label>
+    <select onchange="go('salestax',{b:this.value})">${bs.length > 1 ? `<option value="*"${view.b === '*' ? ' selected' : ''}>★ すべて（月ごとに集計）</option>` : ''}${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}行）</option>`).join('')}</select></div>
+  <div id="taxres">${taxHtml()}</div>`;
+};
+async function loadSales3(){ SALES.batches = await run('salesBatches'); if (view.n === 'salestax') render(); }
+async function loadTax(){
+  const id = view.b; if (!id) return;
+  const r = await run('salesTax', id);
+  if (view.b !== id) return;
+  view.tax = r; const e = $('#taxres'); if (e) e.innerHTML = taxHtml();
+}
+const fy = n => (n < 0 ? '-' : '') + fmtNum(String(Math.abs(Math.round(n))));
+function rateLabel(c){ // 税率は金額から求める(税額÷税抜)。税率が変わっても、列が増えても、そのまま表示できる
+  if (c.plain || !c.base) return '';
+  const r = c.tax / c.base * 100, n = Math.round(r);
+  return Math.abs(r - n) < 0.35 ? '（' + n + '%）' : '（約' + r.toFixed(1) + '%）';
+}
+function taxBlock(m, title){
+  const row = c => `<tr><td>${esc(c.name)}${rateLabel(c)}</td><td class="n">${fy(c.base)}</td><td class="n">${fy(c.tax)}</td><td class="n">${fy(c.base + c.tax)}</td></tr>`;
+  return `<div class="card"><b style="font-size:16px">${esc(title)}</b> <span class="mute">伝票 ${m.slips}枚</span>
+  <div style="overflow:auto;margin-top:8px"><table style="border-collapse:collapse;width:100%;font-size:14px"><thead><tr><th style="text-align:left">税率区分</th><th>税抜売上高</th><th>消費税額</th><th>税込</th></tr></thead><tbody>
+  ${m.cats.filter(c => !c.plain || c.base).map(row).join('')}
+  <tr style="font-weight:bold;background:var(--cl)"><td>合計</td><td class="n">${fy(m.base)}</td><td class="n">${fy(m.tax)}</td><td class="n">${fy(m.total)}</td></tr></tbody></table></div></div>`;
+}
+function taxHtml(){
+  const r = view.tax;
+  if (!r) return '<p class="mute">集計中...</p>';
+  if (r.need && r.need.length) return `<div class="card"><b>このCSVでは税率別の集計ができません</b><div class="mute" style="margin-top:6px">スマイルワークスの売上伝票CSVにある、次の列が見つかりませんでした。<br>${r.need.map(esc).join('<br>')}</div></div>`;
+  if (!r.months.length) return '<p class="mute">集計できるデータがありません</p>';
+  const all = {slips: 0, cats: [], base: 0, tax: 0, total: 0};
+  r.months.forEach(m => { all.slips += m.slips; all.base += m.base; all.tax += m.tax; all.total += m.total; m.cats.forEach(c => { let x = all.cats.find(y => y.name === c.name); if (!x) all.cats.push(x = {name: c.name, plain: c.plain, base: 0, tax: 0}); x.base += c.base; x.tax += c.tax; }); });
+  const label = m => /^\d{4}\/\d{2}$/.test(m) ? m.slice(0, 4) + '年' + Number(m.slice(5)) + '月分' : (m || '日付なし');
+  return r.months.map(m => taxBlock(m, label(m.m))).join('') + (r.months.length > 1 ? taxBlock(all, '全期間の合計') : '') +
+  `<div class="mute" style="margin:6px 2px">・伝票ごとの税率別合計を、伝票番号で重複を除いて集計しています（スマイルワークスの伝票計の値と同じです）。<br>・返品や値引は差し引き済みの金額です。<br>・売上日の月ごとに分けています。${r.skipped ? `<br>・形式の違う ${r.skipped} 件のデータは含まれていません。` : ''}${view.b === '*' ? '<br>・同じ伝票番号が複数のデータにあっても、1枚として数えます。' : ''}</div>`;
+}
 V.sales = () => {
   if (!SALES.batches) { loadSales(); return '<div class="card">読み込み中...</div>'; }
   const bs = SALES.batches;
@@ -143,6 +188,7 @@ V.sales = () => {
   ${bs.length ? `<div class="card"><label style="margin-top:0">検索するデータ</label>
     <div class="row"><select id="sb" style="flex:1" onchange="SALES.res=null;go('sales',{b:this.value})">${bs.length > 1 ? `<option value="*"${view.b === '*' ? ' selected' : ''}>★ すべて（月をまたいで検索）</option>` : ''}${bs.map(b => `<option value="${b.id}"${b.id === view.b ? ' selected' : ''}>${esc(b.name)}（${b.count}件・${esc(b.created)}）</option>`).join('')}</select>
     </div>
+    <div style="margin-top:8px"><button onclick="go('salestax',{b:view.b})">📊 税率別の売上高を見る</button></div>
     <label>検索（空白で区切ると、すべてを含む行だけ表示）</label>
     <input id="sq" value="${esc(view.sq || '')}" placeholder="得意先名・商品名・金額など" oninput="salesQ()">
     <div class="g" style="grid-template-columns:1fr 1fr;margin-top:6px">
@@ -164,7 +210,7 @@ V.salesimport = () => {
     <label>データの名前（例: 2026年8月売上）</label><input id="sname" placeholder="名前">
     <div style="margin-top:8px"><label class="fb">CSVファイルを選ぶ<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="importSales(this)"></label></div></div>
   <h2><span>取り込み済みのデータ（${bs.length}件）</span></h2>
-  ${bs.map(b => `<div class="card"><div class="row"><div class="sp"><b>${esc(b.name)}</b><div class="mute">${b.count}件・${esc(b.created)}</div></div><button onclick="go('sales',{b:'${b.id}'})">検索</button><button class="dng" onclick="delSales('${b.id}')">削除</button></div></div>`).join('') || '<p class="mute">まだありません</p>'}`;
+  ${bs.map(b => `<div class="card"><div class="row"><div class="sp"><b>${esc(b.name)}</b><div class="mute">${b.count}件・${esc(b.created)}</div></div><button onclick="go('salestax',{b:'${b.id}'})">📊 税率別</button><button onclick="go('sales',{b:'${b.id}'})">検索</button><button class="dng" onclick="delSales('${b.id}')">削除</button></div></div>`).join('') || '<p class="mute">まだありません</p>'}`;
 };
 async function loadSales2(){ SALES.batches = await run('salesBatches'); if (view.n === 'salesimport') render(); }
 async function loadSales(){ SALES.batches = await run('salesBatches'); if (view.n === 'sales') render(); }
@@ -251,7 +297,7 @@ async function importSales(inp){
     SALES_NEW = id; SALES = {batches: null, res: null};
     alert('取り込みました（' + data.length + '件）');
   } finally { busy(-1); $('#busy').textContent = '処理中...'; }
-  go('salesimport');
+  go('salestax', {b: SALES_NEW});
 }
 async function delSales(id){
   const b = (SALES.batches || []).find(x => x.id === id);
@@ -328,7 +374,7 @@ async function delForm(){
   await reload0();
   if (view.cfg.afterDelete) view.cfg.afterDelete(); else go('home');
 }
-async function reload0(){ DB = await run('getAll'); }
+async function reload0(){ DB = await run('getAll'); AUTH = true; }
 
 // ---------- 顧客 ----------
 V.customers = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><label class="fb">スマイルワークス取込<input type="file" accept=".csv" style="display:none" onchange="importSmile(this)"></label><button class="pri" onclick="editCustomer()">＋顧客</button></div>
@@ -752,5 +798,4 @@ async function expXlsx(id){
   XLSX.writeFile(wb, '見積書_' + b.q.no + '.xlsx');
 }
 
-$("#tb").innerHTML = tbHtml();
 reload();

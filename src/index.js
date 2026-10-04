@@ -343,6 +343,51 @@ const API = {
     return { total: agg.n, sum: sumExpr ? (agg.s == null ? 0 : agg.s) : null, offset: off, limit: LIM, rows: (r.results || []).map(x => JSON.parse(x.data)), names: (r.results || []).map(x => x.name), skipped: skipped };
   },
 
+  // 税率別の売上高(月ごと)。スマイルワークスの売上CSVにある「伝票ごとの税率別合計」の列を、伝票番号で重複を除いて合計する
+  async salesTax(env, ctx, batchId) {
+    let ids = [String(batchId)], skipped = 0, head;
+    if (batchId === '*') {
+      const all = (await env.DB.prepare('SELECT id,name,headers FROM sales_batches ORDER BY created DESC, id DESC').all()).results || [];
+      if (!all.length) return { months: [], need: [] };
+      head = salesMeta(all[0].headers).h;
+      const key = head.join('\u0001');
+      ids = all.filter(x => salesMeta(x.headers).h.join('\u0001') === key).map(x => x.id);
+      skipped = all.length - ids.length;
+    } else {
+      const b = await env.DB.prepare('SELECT headers FROM sales_batches WHERE id = ?').bind(String(batchId)).first();
+      if (!b) throw fail('データが見つかりません');
+      head = salesMeta(b.headers).h;
+    }
+    // 税率の区分は、見出しから自動で見つける(「○○対象：本体価格合計」と「○○対象：消費税」の組)。税率が増えて列が増えても拾える
+    const need = [];
+    const slipI = head.indexOf('売上番号'), dateI = head.indexOf('売上日');
+    if (slipI < 0) need.push('売上番号');
+    if (dateI < 0) need.push('売上日');
+    const cats = [];
+    head.forEach((h, i) => {
+      const m = /^(.+?)対象：本体価格合計$/.exec(h);
+      if (m) cats.push({ name: m[1], b: i, t: head.indexOf(m[1] + '対象：消費税') });
+      else if (/^(非課税|対象外)：本体価格合計$/.test(h)) cats.push({ name: h.split('：')[0] === '対象外' ? '対象外（不課税）' : '非課税', b: i, t: -1, plain: true });
+    });
+    if (!cats.length) need.push('○○対象：本体価格合計（税率ごとの列）');
+    if (need.length) return { months: [], need: need, skipped: skipped };
+    const J = i => `json_extract(data,'$[${Number(i)}]')`;
+    const N = i => `SUM(CAST(REPLACE(${J(i)},',','') AS REAL))`;
+    const inList = ids.map(() => '?').join(',');
+    const cols = [];
+    cats.forEach((c, k) => { cols.push(`${N(c.b)} AS b${k}`); if (c.t >= 0) cols.push(`${N(c.t)} AS t${k}`); });
+    const sql = `SELECT substr(${J(dateI)},1,7) AS m, COUNT(*) AS slips, ${cols.join(', ')}
+      FROM sales_rows WHERE id IN (SELECT MIN(id) FROM sales_rows WHERE batch IN (${inList}) GROUP BY ${J(slipI)}) GROUP BY m ORDER BY m DESC`;
+    const r = await env.DB.prepare(sql).bind(...ids).all();
+    const R = x => Math.round(Number(x) || 0);
+    const months = (r.results || []).map(x => {
+      const o = { m: x.m || '', slips: x.slips, cats: cats.map((c, k) => ({ name: c.name, plain: !!c.plain, base: R(x['b' + k]), tax: c.t >= 0 ? R(x['t' + k]) : 0 })) };
+      o.base = o.cats.reduce((a, c) => a + c.base, 0); o.tax = o.cats.reduce((a, c) => a + c.tax, 0); o.total = o.base + o.tax;
+      return o;
+    });
+    return { months: months, need: [], skipped: skipped };
+  },
+
   // 手書きメモの文字起こし(Gemini)
   async ocrImage(env, ctx, dataUrl) {
     const m = /^data:(image\/.+?);base64,(.*)$/s.exec(dataUrl || '');
