@@ -1,6 +1,6 @@
-// 業務管理 河村図書教材社  v2.1.1  (2026-10-04)
+// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
-import { verifyAccess, login } from './auth.js';
+import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
 
 const JST = 9 * 3600 * 1000;
@@ -87,8 +87,9 @@ function fail(msg) { const e = new Error(msg); e.app = true; return e; }
 
 // ===== 機能(Apps Script版と同じ名前) =====
 const API = {
-  async getAll(env) {
+  async getAll(env, ctx) {
     const o = {};
+    o.me = { name: ctx.email, admin: !!ctx.admin };
     o.company = await getCompany(env);
     for (const k of Object.keys(TABLES)) o[k] = await readAll(env, k);
     o.dbUrl = '';
@@ -96,8 +97,39 @@ const API = {
   },
 
   // 会社情報(見積書などに載る自社の情報)
+  async getLogs(env, ctx, opt) {
+    await ensureLogs(env);
+    opt = opt || {};
+    const w = [], b = [];
+    if (opt.kind === 'login' || opt.kind === 'op') { w.push('kind = ?'); b.push(opt.kind); }
+    const q = String(opt.q || '').trim();
+    if (q) for (const t of q.split(/\s+/).slice(0, 5)) { w.push("(who || ' ' || action || ' ' || detail) LIKE ?"); b.push('%' + t.replace(/[%_]/g, '') + '%'); }
+    const off = Math.max(0, Number(opt.offset) || 0);
+    const r = await env.DB.prepare('SELECT id,at,who,kind,action,detail,ip FROM logs' + (w.length ? ' WHERE ' + w.join(' AND ') : '') + ' ORDER BY id DESC LIMIT 101 OFFSET ' + off).bind(...b).all();
+    const rows = r.results || [];
+    return { rows: rows.slice(0, 100), more: rows.length > 100 };
+  },
+  // 合言葉の変更(管理者のみ)。kind: 'common'=みんなで使う合言葉 / 'admin'=管理者用。確認のため、管理者用の今の合言葉が必要
+  async changePassword(env, ctx, kind, newPw, adminPw) {
+    if (!ctx.admin) throw fail('合言葉を変更できるのは管理者だけです');
+    newPw = String(newPw || '');
+    if (kind !== 'common' && kind !== 'admin') throw fail('変更する合言葉を選んでください');
+    if (newPw.length < 8) throw fail('新しい合言葉は8文字以上にしてください');
+    if (newPw.length > 100) throw fail('新しい合言葉が長すぎます');
+    await new Promise(r => setTimeout(r, 800));
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS "settings" ("key" TEXT PRIMARY KEY, "value" TEXT)').run();
+    const sec = await getSecurity(env);
+    if (!(await checkAdmin(env, sec, adminPw))) throw fail('管理者用の今の合言葉が違います');
+    if (kind === 'common' && (await checkAdmin(env, sec, newPw))) throw fail('管理者用と同じ合言葉は、みんなで使う合言葉にできません');
+    if (kind === 'admin' && (await checkCommon(env, sec, newPw))) throw fail('みんなで使う合言葉と同じものは、管理者用にできません');
+    const up = (k, v) => env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v);
+    const ver = crypto.randomUUID().replace(/-/g, '');
+    await env.DB.batch([up(kind === 'admin' ? 'adminpw' : 'pw', await hashPw(newPw)), up('authver', ver)]);
+    return true; // 全員のログインが切れる(新しい合言葉で入り直す)
+  },
   async getCompany(env) { return getCompany(env); },
   async saveCompany(env, ctx, obj) {
+    if (!ctx.admin) throw fail('会社情報を変更できるのは管理者だけです');
     const out = {};
     for (const k of Object.keys(CONFIG.company)) out[k] = String((obj && obj[k]) == null ? '' : obj[k]).slice(0, 500);
     if (!out.name.trim()) throw fail('会社名を入力してください');
@@ -428,6 +460,65 @@ async function bundle(env, quoteId) {
   return { q: q, lines: lines, p: p, c: c };
 }
 
+
+// ===== 操作ログ・ログインログ =====
+let logReady = false;
+async function ensureLogs(env) {
+  if (logReady) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, who TEXT, kind TEXT, action TEXT, detail TEXT, ip TEXT)').run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS logs_at ON logs (at)').run();
+  logReady = true;
+}
+// kind: 'login'(ログイン・ログアウト) / 'op'(操作)。ログの失敗で本来の処理を止めない
+async function writeLog(env, who, kind, action, detail, ip) {
+  try {
+    await ensureLogs(env);
+    await env.DB.prepare('INSERT INTO logs (at,who,kind,action,detail,ip) VALUES (?,?,?,?,?,?)')
+      .bind(new Date(Date.now() + JST).toISOString().slice(0, 19).replace('T', ' '), String(who || ''), kind, String(action || ''), String(detail || '').slice(0, 300), String(ip || '')).run();
+    if (Math.random() < 0.02) {
+      const old = new Date(Date.now() + JST - 400 * 86400000).toISOString().slice(0, 10);
+      await env.DB.prepare('DELETE FROM logs WHERE at < ?').bind(old).run();
+    }
+  } catch (e) { console.error('log', e && e.message); }
+}
+const TLABEL = { customers: '顧客', projects: '案件', memos: 'メモ', vendors: '仕入先', requests: '仕入先依頼', quotes: '見積書' };
+const nameOf = (key, o) => {
+  o = o || {};
+  const v = key === 'memos' ? String(o.body || '').split('\n')[0] : key === 'quotes' ? [o.no, o.subject].filter(Boolean).join(' ') : key === 'requests' ? o.vendor : o.name;
+  return String(v || '').slice(0, 60);
+};
+// 呼び出しごとの記録内容。null は記録しない(読み取りだけの操作)
+async function describeOp(env, fn, args, before) {
+  switch (fn) {
+    case 'save': { const k = args[0], o = args[1] || {}; return [(o.id ? '更新' : '追加'), TLABEL[k] + ' ' + nameOf(k, o)]; }
+    case 'remove': return ['削除', (TLABEL[args[0]] || args[0]) + ' ' + (before || '')];
+    case 'saveQuote': { const q = args[0] || {}; return [(q.id ? '更新' : '追加'), '見積書 ' + nameOf('quotes', q)]; }
+    case 'saveCompany': return ['更新', '会社情報'];
+    case 'changePassword': return ['変更', args[0] === 'admin' ? '管理者用の合言葉' : 'みんなで使う合言葉'];
+    case 'uploadPhoto': return ['追加', '仕入先の回答ファイル ' + String(args[2] || '')];
+    case 'removePhoto': return ['削除', '仕入先の回答ファイル'];
+    case 'makePdf': return ['出力', '見積書PDF ' + (before || '')];
+    case 'makeCsv': return ['出力', '見積書CSV ' + (Array.isArray(args[0]) ? args[0].length + '件' : '')];
+    case 'makeRequestPdf': return ['出力', '見積依頼書PDF ' + (before || '')];
+    case 'importCustomers': return ['取込', '顧客CSV ' + (Array.isArray(args[0]) ? args[0].length + '行' : '')];
+    case 'salesBegin': return ['取込', '売上データ ' + String(args[0] || '')];
+    case 'salesDelete': return ['削除', '売上データ ' + (before || '')];
+    case 'salesSearch': { const o = args[3] || {}; return args[2] ? null : ['検索', '売上データ「' + String(args[1] || '') + '」' + (o.from || o.to ? ' ' + (o.from || '') + '〜' + (o.to || '') : '')]; }
+    case 'salesTax': return ['閲覧', '売上データの税率別集計'];
+    case 'ocrImage': return ['利用', '手書きの文字起こし'];
+    default: return null;
+  }
+}
+async function beforeName(env, fn, args) {
+  try {
+    if (fn === 'remove' && TABLES[args[0]]) { const r = (await readAll(env, args[0], '"id" = ?', String(args[1])))[0]; return r ? nameOf(args[0], r) : ''; }
+    if (fn === 'salesDelete') { const r = await env.DB.prepare('SELECT name FROM sales_batches WHERE id = ?').bind(String(args[0])).first(); return r ? r.name : ''; }
+    if (fn === 'makePdf') { const q = (await readAll(env, 'quotes', '"id" = ?', String(args[0])))[0]; return q ? nameOf('quotes', q) : ''; }
+    if (fn === 'makeRequestPdf') { const q = (await readAll(env, 'requests', '"id" = ?', String(args[0])))[0]; return q ? q.vendor : ''; }
+  } catch (e) {}
+  return '';
+}
+
 // ===== 受付 =====
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -440,16 +531,20 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/login') {
       let b = {}; try { b = await request.json(); } catch (e) {}
       const cookie = await login(env, b.name, b.password);
-      if (!cookie) return json({ ok: false, error: '名前または合言葉が違います' }, 401);
+      const ip = request.headers.get('cf-connecting-ip') || '';
+      const nm = String(b.name || '').trim().slice(0, 30) || '利用者';
+      if (!cookie) { await writeLog(env, nm, 'login', 'ログイン失敗', '名前または合言葉が違います', ip); return json({ ok: false, error: '名前または合言葉が違います' }, 401); }
+      await writeLog(env, nm, 'login', 'ログイン', '', ip);
       return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': cookie } });
     }
     if (request.method === 'POST' && url.pathname === '/api/logout') {
+      try { const a0 = await verifyAccess(request, env); if (a0.ok) await writeLog(env, a0.email, 'login', 'ログアウト', '', request.headers.get('cf-connecting-ip') || ''); } catch (e) {}
       return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': 'sess=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' } });
     }
 
     const auth = await verifyAccess(request, env);
     if (!auth.ok) return json({ ok: false, error: auth.error, login: !!auth.login }, 401);
-    const ctx = { email: auth.email || '' };
+    const ctx = { email: auth.email || '', admin: !!auth.admin };
 
     // 写真・PDFの表示
     if (request.method === 'GET' && url.pathname.startsWith('/api/file/')) {
@@ -467,7 +562,9 @@ export default {
       try {
         const body = await request.json();
         const args = Array.isArray(body.args) ? body.args : [];
+        const pre = (fn === 'remove' || fn === 'salesDelete' || fn === 'makePdf' || fn === 'makeRequestPdf') ? await beforeName(env, fn, args) : '';
         const result = await API[fn](env, ctx, ...args);
+        try { const d = await describeOp(env, fn, args, pre); if (d) await writeLog(env, ctx.email, 'op', d[0], d[1], ''); } catch (e) {}
         return json({ ok: true, result: result });
       } catch (e) {
         if (!e.app) console.error(fn, e && e.stack || e);

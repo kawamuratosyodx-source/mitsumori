@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.1.1  (2026-10-04)
+// 業務管理 河村図書教材社  v2.4.0  (2026-10-04)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -51,10 +51,10 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
 const TABS = [['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
-function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company') ? '' : 'home'; }
+function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs') ? '' : 'home'; }
 function tbHtml(){
   const cur = tabOf(view.n);
   return TABS.map(t => `<div data-sec="${t[0]}" class="tg${t[0] === cur ? ' on' : ''}"><a href="#${t[0]}" onclick="return tbGo(event,'${t[0]}')">${t[1]}</a><a class="x" href="#${t[0]}" target="_blank" rel="noopener" title="別のタブで開く">↗</a></div>`).join('');
@@ -68,7 +68,7 @@ async function reload(){
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -98,7 +98,7 @@ V.menu = () => {
   <div class="card click tile" data-sec="memos" onclick="go('memos')"><span class="ic">📝</span><b>メモ帳</b><div class="mute">問い合わせ・注文・連絡事項</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
   <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
   <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div></div>
-  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button></div>`;
+  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button><button class="mbtn" onclick="go('logs')">操作履歴</button></div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
@@ -111,18 +111,63 @@ function salesCols(b){ // 表示する列(利用者が選んだもの。なけ�
   try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
   return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
 }
+const LOGS = {rows: [], more: false, kind: '', q: '', loading: false};
+async function loadLogs(more){
+  if (LOGS.loading) return; LOGS.loading = true;
+  try {
+    const r = await run('getLogs', {kind: LOGS.kind, q: LOGS.q, offset: more ? LOGS.rows.length : 0});
+    LOGS.rows = more ? LOGS.rows.concat(r.rows) : r.rows; LOGS.more = r.more;
+  } finally { LOGS.loading = false; }
+  const el = $('#loglist'); if (el) el.innerHTML = logsHtml();
+}
+function logsHtml(){
+  const rows = LOGS.rows.map(r => {
+    const bad = r.action === 'ログイン失敗', del = r.action === '削除';
+    return `<tr><td style="white-space:nowrap">${esc(r.at.slice(5, 16))}</td><td>${esc(r.who)}</td><td style="white-space:nowrap${bad ? ';color:#b42318;font-weight:700' : del ? ';color:#b42318' : ''}">${esc(r.action)}</td><td>${esc(r.detail)}${r.ip ? ' <span class="mute">(' + esc(r.ip) + ')</span>' : ''}</td></tr>`;
+  }).join('');
+  return rows ? `<div style="overflow:auto"><table class="tbl" style="width:100%;font-size:13px"><tr><th>日時</th><th>お名前</th><th>操作</th><th>内容</th></tr>${rows}</table></div>` + (LOGS.more ? `<div class="row" style="margin-top:8px"><button onclick="loadLogs(true)">さらに100件表示</button></div>` : '') : '<p class="mute">記録はありません</p>';
+}
+V.logs = () => {
+  setTimeout(() => loadLogs(false), 0);
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span></div>
+  <h2><span>操作履歴（ログイン・操作）</span></h2>
+  <div class="bar"><select style="width:auto" onchange="LOGS.kind=this.value;loadLogs(false)">${[['', 'すべて'], ['login', 'ログイン・ログアウト'], ['op', '操作']].map(x => `<option value="${x[0]}" ${LOGS.kind === x[0] ? 'selected' : ''}>${x[1]}</option>`).join('')}</select>
+  <input placeholder="お名前・内容で検索" value="${esc(LOGS.q)}" oninput="LOGS.q=this.value;clearTimeout(LOGS.t);LOGS.t=setTimeout(()=>loadLogs(false),350)"></div>
+  <div id="loglist">${logsHtml()}</div>`;
+};
 V.company = () => {
   const c = DB.company || {};
   const F = [['name', '会社名', 'text'], ['address', '住所（〒を含めて入力）', 'text'], ['tel', '電話番号（例: 0532-39-5311）', 'text'], ['fax', 'FAX番号（例: 0532-39-5312）', 'text'],
     ['email', 'メールアドレス', 'text'], ['regNo', 'インボイス登録番号（例: T1234567890123）', 'text'],
     ['bank', '振込先（見積書の下部に載せます）', 'area'], ['note', '見積書の下部に載せる文（支払条件・納期の目安など）', 'area']];
+  const adm = !!(DB.me && DB.me.admin), dis = adm ? '' : ' disabled';
   return `<div class="bar"><button onclick="go('menu')">← メニュー</button></div>
   <h2><span>🏢 会社情報</span></h2>
-  <div class="card"><div class="mute" style="margin-bottom:4px">見積書・見積依頼書・Excelに載る、自社の情報です。空欄の項目は載りません。</div>
-  ${F.map(f => `<label>${f[1]}</label>` + (f[2] === 'area' ? `<textarea id="co_${f[0]}" rows="3">${esc(c[f[0]])}</textarea>` : `<input id="co_${f[0]}" value="${esc(c[f[0]])}">`)).join('')}
-  <div class="row" style="margin-top:14px"><button class="pri" onclick="saveCompany()">保存</button></div></div>
-  <div class="card"><b>見積書での載り方（見本）</b><div style="text-align:right;font-size:13px;margin-top:6px">${coPreview(c)}</div></div>`;
+  <div class="card"><div class="mute" style="margin-bottom:4px">見積書・見積依頼書・Excelに載る、自社の情報です。空欄の項目は載りません。${adm ? '' : '<br><b style="color:#b42318">編集できるのは管理者だけです（お名前「管理者」でログインしてください）。</b>'}</div>
+  ${F.map(f => `<label>${f[1]}</label>` + (f[2] === 'area' ? `<textarea id="co_${f[0]}" rows="3"${dis}>${esc(c[f[0]])}</textarea>` : `<input id="co_${f[0]}" value="${esc(c[f[0]])}"${dis}>`)).join('')}
+  ${adm ? '<div class="row" style="margin-top:14px"><button class="pri" onclick="saveCompany()">保存</button></div>' : ''}</div>
+  <div class="card"><b>見積書での載り方（見本）</b><div style="text-align:right;font-size:13px;margin-top:6px">${coPreview(c)}</div></div>
+  ${adm ? pwCard() : ''}`;
 };
+function pwCard(){
+  return `<div class="card"><b>🔑 合言葉の変更（管理者のみ）</b>
+  <div class="mute" style="margin:4px 0">変更すると、全員のログインが切れます。新しい合言葉で入り直してください。合言葉は8文字以上にしてください。</div>
+  <label>変更する合言葉</label><select id="pw_kind"><option value="common">みんなで使う合言葉</option><option value="admin">管理者用の合言葉</option></select>
+  <label>新しい合言葉</label><input id="pw_new" type="password" autocomplete="new-password">
+  <label>新しい合言葉（もう一度）</label><input id="pw_new2" type="password" autocomplete="new-password">
+  <label>管理者用の今の合言葉（確認のため）</label><input id="pw_cur" type="password" autocomplete="current-password">
+  <div class="row" style="margin-top:14px"><button class="pri" onclick="changePw()">合言葉を変更</button></div></div>`;
+}
+async function changePw(){
+  const n1 = $('#pw_new').value, n2 = $('#pw_new2').value, cur = $('#pw_cur').value;
+  if (n1.length < 8) return alert('新しい合言葉は8文字以上にしてください');
+  if (n1 !== n2) return alert('新しい合言葉が、2回の入力で一致しません');
+  if (!cur) return alert('管理者用の今の合言葉を入力してください');
+  if (!confirm('合言葉を変更します。全員のログインが切れます。よろしいですか？')) return;
+  await run('changePassword', $('#pw_kind').value, n1, cur);
+  alert('合言葉を変更しました。新しい合言葉でログインし直してください。');
+  location.reload();
+}
 function coPreview(c){
   const tf = [c.tel ? 'TEL ' + c.tel : '', c.fax ? 'FAX ' + c.fax : ''].filter(Boolean).join('　');
   return `<b>${esc(c.name)}</b>${c.address ? '<br>' + esc(c.address) : ''}${tf ? '<br>' + esc(tf) : ''}${c.email ? '<br>' + esc(c.email) : ''}${c.regNo ? '<br>登録番号: ' + esc(c.regNo) : ''}`;
@@ -446,6 +491,14 @@ V.memos = () => `<div class="bar"><button onclick="go('menu')">← メニュー<
   <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()">
   <select style="width:auto" onchange="view.ms=this.value;$('#mlist').innerHTML=memoListHtml()">${['', '未対応', '対応中', '完了'].map(x => `<option value="${x}" ${(view.ms || '') === x ? 'selected' : ''}>${x || 'すべて'}</option>`).join('')}</select></div>
   <div id="mlist">${memoListHtml()}</div>`;
+function stampHtml(o){
+  if (!o) return '';
+  const c = String(o.created || '').slice(0, 16), u = String(o.updated || '').slice(0, 16);
+  const parts = [];
+  if (c || o.author) parts.push('作成 ' + [c, o.author].filter(Boolean).join('　'));
+  if (u && u !== c) parts.push('更新 ' + u);
+  return parts.join('　／　');
+}
 function memoListHtml(){
   const words = (view.mq || '').toLowerCase().split(/\s+/).filter(Boolean);
   const stamp = m => String(m.updated || m.created || '');
@@ -459,7 +512,8 @@ function memoListHtml(){
   return list.slice(0, 200).map(m => {
     const c = cust(m.customerId), lines = String(m.body || '').split('\n');
     return `<div class="card click" onclick="editMemo('${m.id}')"><div class="row"><b class="sp">${esc(lines[0].slice(0, 60) || '(無題)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
-    <div class="mute">${esc(c.name || '')} ${esc(m.who)}　${esc(stamp(m).slice(0, 16))}</div>
+    <div class="mute">${esc(c.name || '')} ${esc(m.who)}</div>
+    <div class="mute">${esc(stampHtml(m))}</div>
     ${lines.length > 1 ? `<div style="white-space:pre-wrap;margin-top:4px;max-height:4.5em;overflow:hidden">${esc(lines.slice(1).join('\n'))}</div>` : ''}
     ${m.status !== '完了' ? `<div class="row" style="margin-top:6px" onclick="event.stopPropagation()"><button onclick="markMemo('${m.id}','完了')">完了にする</button></div>` : ''}</div>`;
   }).join('') || '<p class="mute">メモはありません</p>';
@@ -486,7 +540,7 @@ function editMemo(id){
       {k:'kind',l:'種別',t:'select',o:['問い合わせ','注文','依頼','連絡事項','クレーム','その他'].map(x => [x, x])},
       {k:'status',l:'対応状況',t:'select',o:['未対応','対応中','完了'].map(x => [x, x])},
       {k:'body',l:'内容（1行目が見出しになります）',t:'textarea',rows:9}],
-    extra: (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + `<div class="row" style="margin-top:10px"><label class="fb">✍ 手書きを撮影して文字起こし<input type="file" accept="image/*" capture="environment" style="display:none" onchange="ocrMemo(this)"></label><label class="fb">🖼 写真から文字起こし<input type="file" accept="image/*" style="display:none" onchange="ocrMemo(this)"></label></div><div class="mute" style="margin-top:4px">文字起こしは内容の欄の末尾に追加されます。手書きは誤読があるため、数字・電話番号・名前は必ず確認してください。</div>`,
+    extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + `<div class="row" style="margin-top:10px"><label class="fb">✍ 手書きを撮影して文字起こし<input type="file" accept="image/*" capture="environment" style="display:none" onchange="ocrMemo(this)"></label><label class="fb">🖼 写真から文字起こし<input type="file" accept="image/*" style="display:none" onchange="ocrMemo(this)"></label></div><div class="mute" style="margin-top:4px">文字起こしは内容の欄の末尾に追加されます。手書きは誤読があるため、数字・電話番号・名前は必ず確認してください。</div>`,
     onDelete: !!id, afterDelete: () => go('memos'), after: () => go('memos')});
 }
 
@@ -519,7 +573,7 @@ V.project = () => {
   <div class="card"><b style="font-size:17px">${esc(p.name)}</b> <span class="badge">${esc(p.status)}</span><div class="mute">${esc(c.name)}　${esc(c.contact)}</div>${p.memo ? `<div style="margin-top:6px;white-space:pre-wrap">${esc(p.memo)}</div>` : ''}</div>
   ${(() => { const S = projSummary(p.id); if (!S) return ''; if (!S.pf.n) return `<div class="card"><b>粗利</b> <span class="mute">（${S.label}）</span><div class="mute">原価が未入力です。見積書の明細に「原価(単価)」を入れると粗利が出ます。</div></div>`; return `<div class="card"><b>粗利</b> <span class="mute">（${S.label}・税抜）</span><div class="row" style="margin-top:6px"><div class="sp">売上 ¥${yen(S.pf.rev)}<br>原価 ¥${yen(S.pf.cost)}</div><div style="text-align:right"><b style="font-size:20px">粗利 ¥${yen(S.pf.profit)}</b><br>粗利率 ${pct(S.pf.profit, S.pf.rev)}</div></div>${S.partial ? '<div class="mute" style="margin-top:4px">※原価が未入力の行があります（入力済みの' + S.pf.n + '行のみの計算）</div>' : ''}</div>`; })()}
   <h2><span>見積書</span><button class="pri" onclick="newQuote('${p.id}')">＋作成</button></h2>
-  ${qs.map(q => `<div class="card"><div class="row"><b class="sp">${esc(q.no)}</b><span class="badge" style="background:${{'受注':'#e6f4ea','失注':'#fde8e8'}[q.result] || '#eee'};color:#333">${esc(q.result || '未定')}</span><b>¥${yen(q.total)}</b></div><div class="mute">${esc(q.subject)}　発行日 ${esc(q.issueDate)}</div>${(() => { const pf = profitOf(DB.lines.filter(l => l.quoteId === q.id)); return pf.n ? `<div class="mute">粗利 ¥${yen(pf.profit)}（${pct(pf.profit, pf.rev)}）</div>` : ''; })()}
+  ${qs.map(q => `<div class="card"><div class="row"><b class="sp">${esc(q.no)}</b><span class="badge" style="background:${{'受注':'#e6f4ea','失注':'#fde8e8'}[q.result] || '#eee'};color:#333">${esc(q.result || '未定')}</span><b>¥${yen(q.total)}</b></div><div class="mute">${esc(q.subject)}　発行日 ${esc(q.issueDate)}</div><div class="mute">${esc(stampHtml(q))}</div>${(() => { const pf = profitOf(DB.lines.filter(l => l.quoteId === q.id)); return pf.n ? `<div class="mute">粗利 ¥${yen(pf.profit)}（${pct(pf.profit, pf.rev)}）</div>` : ''; })()}
     <div class="row" style="margin-top:8px"><button onclick="editQuote('${q.id}')">編集</button><button onclick="dupQuote('${q.id}')">複製</button><button onclick="expPdf('${q.id}')">PDF</button><button onclick="expXlsx('${q.id}')">Excel</button><button onclick="expCsv('${q.id}')">CSV</button></div></div>`).join('') || '<p class="mute">見積書はまだありません</p>'}
   ${compareHtml(rs)}
   ${memosOf(p.id)}
@@ -731,7 +785,7 @@ function upd(){
 V.quote = () => {
   const q = view.q, p = proj(q.projectId);
   return `<div class="bar"><button onclick="go('project',{id:'${q.projectId}'})">← 案件へ</button></div>
-  <div class="card"><b>${esc(cust(p.customerId).name)} / ${esc(p.name)}</b>
+  <div class="card"><b>${esc(cust(p.customerId).name)} / ${esc(p.name)}</b>${stampHtml(q) ? `<div class="mute">${esc(stampHtml(q))}</div>` : ''}
   <label>件名</label><input value="${esc(q.subject)}" oninput="view.q.subject=this.value">
   <div class="g" style="grid-template-columns:1fr 1fr"><div><label>見積書発行日</label><input type="date" value="${esc(q.issueDate)}" oninput="view.q.issueDate=this.value"></div>
   <div><label>有効期限</label><input id="vu" type="date" value="${esc(q.validUntil)}" oninput="view.q.validUntil=this.value"></div></div>
