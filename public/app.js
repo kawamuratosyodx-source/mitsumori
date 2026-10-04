@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.7.0  (2026-10-04)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -118,10 +118,49 @@ function salesCols(b){ // 表示する列(利用者が選んだもの。なけ�
   try { const v = JSON.parse(localStorage.getItem('scols:' + b.id) || 'null'); if (Array.isArray(v) && v.length) return v; } catch (e) {}
   return b.show && b.show.length ? b.show : b.headers.map((_, i) => i);
 }
-const ST = {info: null, files: null};
+const ST = {info: null, files: null, drive: null};
+function gasScript(key){
+  return [
+    "// 業務管理アプリ用: 写真・PDFをGoogleドライブに保存する受付口",
+    "const KEY = '" + key + "';",
+    "const FOLDER_NAME = '業務管理 写真・PDF';",
+    "function folder_() { const it = DriveApp.getFoldersByName(FOLDER_NAME); return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER_NAME); }",
+    "function inFolder_(f) { const id = folder_().getId(), ps = f.getParents(); while (ps.hasNext()) { if (ps.next().getId() === id) return true; } return false; }",
+    "function out_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }",
+    "function doPost(e) {",
+    "  try {",
+    "    const p = JSON.parse(e.postData.contents);",
+    "    if (p.key !== KEY) return out_({ok: false, error: 'key'});",
+    "    if (p.action === 'ping') return out_({ok: true, folder: folder_().getId()});",
+    "    if (p.action === 'put') { const f = folder_().createFile(Utilities.newBlob(Utilities.base64Decode(p.data), p.ctype, p.name)); return out_({ok: true, id: f.getId()}); }",
+    "    if (p.action === 'get') { const f = DriveApp.getFileById(p.id); if (!inFolder_(f)) return out_({ok: false, error: 'folder'}); return out_({ok: true, data: Utilities.base64Encode(f.getBlob().getBytes())}); }",
+    "    if (p.action === 'del') { const f = DriveApp.getFileById(p.id); if (!inFolder_(f)) return out_({ok: false, error: 'folder'}); f.setTrashed(true); return out_({ok: true}); }",
+    "    return out_({ok: false, error: 'action'});",
+    "  } catch (err) { return out_({ok: false, error: String(err)}); }",
+    "}"
+  ].join('\n');
+}
+function copyText(id){ const el = $('#' + id); try { navigator.clipboard.writeText(el.value || el.textContent); alert('コピーしました'); } catch (e) { el.select && el.select(); alert('選択しました。コピー（Ctrl+C）してください'); } }
+async function driveTest(){ await run('driveTest'); alert('つながりました。これから保存する写真・PDFは、Googleドライブに入ります。'); }
+function driveCard(){
+  const d = ST.drive || {};
+  if (d.configured) return `<div class="card"><b>☁ Googleドライブ連携</b><div class="mute" style="margin:6px 0">設定済みです。新しく保存する写真・PDFは、Googleドライブの「業務管理 写真・PDF」フォルダに入ります。アプリの容量は使いません。</div><div class="row"><button onclick="driveTest()">接続を確認</button></div><div class="mute" style="margin-top:6px">やめるときは、Cloudflareの「変数とシークレット」から DRIVE_GAS_URL と DRIVE_GAS_KEY を削除します。すでにドライブに入れたファイルは、設定を消すとアプリから開けなくなります（ドライブには残ります）。</div></div>`;
+  if (!ST.gkey) { const a = new Uint8Array(20); crypto.getRandomValues(a); ST.gkey = Array.from(a, x => x.toString(16).padStart(2, '0')).join(''); }
+  return `<div class="card"><b>☁ Googleドライブ連携（準備が必要です）</b>
+  <div class="mute" style="margin:6px 0">写真・PDFをGoogleドライブに保存できるようにします。最初に1回だけ、次の準備をします。Google Cloudは使わないので、カード登録は要りません。</div>
+  <ol style="margin:6px 0 6px 18px;padding:0;font-size:14px;line-height:1.6">
+  <li>保存先にしたいGoogleアカウントで、<a href="https://script.google.com" target="_blank" rel="noopener">script.google.com</a> を開き、「新しいプロジェクト」を作ります。</li>
+  <li>最初からある文字を全部消して、下の文字を貼り付けて保存します。<br><button onclick="copyText('gas_code')">スクリプトをコピー</button><textarea id="gas_code" readonly rows="5" style="font-size:11px;margin-top:6px">${esc(gasScript(ST.gkey))}</textarea></li>
+  <li>右上の「デプロイ」→「新しいデプロイ」→ 種類は「ウェブアプリ」。「次のユーザーとして実行」は<b>自分</b>、「アクセスできるユーザー」は<b>全員</b>にして、デプロイします。</li>
+  <li>初回は「アクセスを承認」が出ます。自分のアカウントを選び、「詳細」→「（プロジェクト名）に移動」→「許可」を押します。</li>
+  <li>出てきた「ウェブアプリのURL」（https://script.google.com/macros/s/…/exec）をコピーします。</li>
+  <li>Cloudflareの「変数とシークレット」に、2つ登録して保存します。<br>・名前 <code>DRIVE_GAS_URL</code> ＝ 手順5のURL<br>・名前 <code>DRIVE_GAS_KEY</code> ＝ <code id="gas_key">${esc(ST.gkey)}</code> <button onclick="copyText('gas_key')">コピー</button></li>
+  <li>デプロイが終わったら、この画面を開き直して「接続を確認」を押します。</li></ol>
+  <div class="mute">この画面を開き直すと、キーが変わります。手順2と6のキーは、必ず同じものを使ってください。</div></div>`;
+}
 const fmtB = n => n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 async function loadStorage(){
-  try { ST.info = await run('getStorage'); ST.files = await run('listFiles'); } catch (e) { return; }
+  try { ST.info = await run('getStorage'); ST.files = await run('listFiles'); ST.drive = await run('driveStatus'); } catch (e) { return; }
   if (view.n === 'storage') render();
 }
 function purgeCut(){ const el = $('#pg_date'); return el ? el.value : ''; }
@@ -154,16 +193,18 @@ V.storage = () => {
     <div style="height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${col}"></div></div>
     <div style="margin-top:6px">無料で使える残り: <b style="color:${col}">約 ${fmtB(left)}</b></div>
     <table style="width:100%;margin-top:10px;font-size:14px"><tr><td>📎 回答の写真・PDF（${i.files.n}件）</td><td class="n">${fmtB(i.files.bytes)}</td></tr>
+    ${i.drive && i.drive.n ? `<tr><td>☁ Googleドライブに保存（${i.drive.n}件）</td><td class="n">${fmtB(i.drive.bytes)}（アプリの容量は使わない）</td></tr>` : ''}
     <tr><td>💴 売上データ（${i.sales.batches}件・${i.sales.rows}行）</td><td class="n">${fmtB(i.sales.bytes)}</td></tr>
     <tr><td>その他（メモ・案件・見積・操作履歴${i.logs}件など）</td><td class="n">${fmtB(other)}</td></tr></table>
     <div class="mute" style="margin-top:8px">無料プランは、1つのデータベースが500MBまでです（Cloudflareの無料枠）。上限に近づくと、保存や取り込みができなくなります。1日あたりの読み書きの回数の上限（読み取り500万行／書き込み10万行）は、このアプリの使い方ではほぼ届きません。回数はCloudflareの管理画面で確認できます。</div></div>
+  ${driveCard()}
   <div class="card"><b>過去の写真・PDFをまとめて削除</b>
     <div class="mute" style="margin:4px 0">仕入先の回答に保存した写真・PDFが対象です。見積書や案件、メモは消えません。削除したものは戻せません。${oldest ? '一番古いのは ' + oldest + ' です。' : '保存されたファイルはありません。'}</div>
     <label>この日より前に保存したものを削除</label><input id="pg_date" type="date" value="${d0.toISOString().slice(0, 10)}" oninput="purgePreview()">
     <div id="pg_prev" style="margin-top:8px;font-weight:700"></div>
     <div class="row" style="margin-top:10px"><button class="dng" id="pg_btn" onclick="purgeNow()">まとめて削除</button></div>
     <div class="mute" style="margin-top:6px">削除してもグラフの数字がすぐには減らないことがあります（空いた場所は、このあと再利用されます）。</div></div>
-  ${fl.length ? `<div class="card"><b>保存されているファイル（古い順・先頭50件）</b><div style="overflow:auto"><table style="width:100%;font-size:13px"><tr><th>保存日</th><th>種類</th><th>仕入先</th><th>案件</th><th class="n">大きさ</th></tr>${fl.slice(0, 50).map(f => `<tr><td style="white-space:nowrap">${esc(String(f.created).slice(0, 10))}</td><td>${esc(f.kind)}</td><td>${esc(f.vendor)}</td><td>${esc(f.project)}</td><td class="n" style="white-space:nowrap">${fmtB(f.size)}</td></tr>`).join('')}</table></div></div>` : ''}`;
+  ${fl.length ? `<div class="card"><b>保存されているファイル（古い順・先頭50件）</b><div style="overflow:auto"><table style="width:100%;font-size:13px"><tr><th>保存日</th><th>種類</th><th>仕入先</th><th>案件</th><th>場所</th><th class="n">大きさ</th></tr>${fl.slice(0, 50).map(f => `<tr><td style="white-space:nowrap">${esc(String(f.created).slice(0, 10))}</td><td>${esc(f.kind)}</td><td>${esc(f.vendor)}</td><td>${esc(f.project)}</td><td>${f.gid ? `<a href="https://drive.google.com/file/d/${esc(f.gid)}/view" target="_blank" rel="noopener">ドライブ</a>` : 'アプリ'}</td><td class="n" style="white-space:nowrap">${fmtB(f.size)}</td></tr>`).join('')}</table></div></div>` : ''}`;
 };
 const LOGS = {rows: [], more: false, kind: '', q: '', loading: false};
 async function loadLogs(more){

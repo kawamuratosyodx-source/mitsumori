@@ -1,7 +1,8 @@
-// 業務管理 河村図書教材社  v2.6.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.7.0  (2026-10-04)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
+import { driveConfigured, isDriveRef, driveId, drivePing, driveUpload, driveGet, driveDelete } from './gdrive.js';
 
 const JST = 9 * 3600 * 1000;
 const nowStr = () => new Date(Date.now() + JST).toISOString().slice(0, 16).replace('T', ' ');
@@ -75,11 +76,19 @@ async function putFile(env, id, ctype, name, b64) {
 async function getFile(env, id) {
   const f = await env.DB.prepare('SELECT * FROM "files" WHERE "id" = ?').bind(id).first();
   if (!f) return null;
+  if (isDriveRef(f.chunks)) { // Googleドライブに保存してあるもの
+    if (!driveConfigured(env)) return null;
+    try { return { ctype: f.ctype, bytes: await driveGet(env, driveId(f.chunks)) }; } catch (e) { console.error('drive get', e && e.message); return null; }
+  }
   const { results } = await env.DB.prepare('SELECT "data" FROM "file_chunks" WHERE "fid" = ? ORDER BY "seq"').bind(id).all();
   if (results.length !== Number(f.chunks)) return null;
   return { ctype: f.ctype, bytes: b64ToBytes(results.map(r => r.data).join('')) };
 }
 async function deleteFile(env, id) {
+  try {
+    const f = await env.DB.prepare('SELECT "chunks" FROM "files" WHERE "id" = ?').bind(id).first();
+    if (f && isDriveRef(f.chunks) && driveConfigured(env)) await driveDelete(env, driveId(f.chunks));
+  } catch (e) { console.error('drive delete', e && e.message); }
   await env.DB.batch([env.DB.prepare('DELETE FROM "file_chunks" WHERE "fid" = ?').bind(id), env.DB.prepare('DELETE FROM "files" WHERE "id" = ?').bind(id)]);
 }
 
@@ -103,11 +112,12 @@ const API = {
     const one = async (sql) => (await env.DB.prepare(sql).first()) || {};
     const t = await env.DB.prepare('SELECT 1 AS x').all();
     const dbBytes = Number(t.meta && t.meta.size_after) || 0;
-    const f = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CAST("size" AS INTEGER)),0) AS b FROM "files"');
+    const f = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN "chunks" LIKE \'drive:%\' THEN 0 ELSE CAST("size" AS INTEGER) END),0) AS b FROM "files"');
+    const fd = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CAST("size" AS INTEGER)),0) AS b FROM "files" WHERE "chunks" LIKE \'drive:%\'');
     const sr = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH("data")+LENGTH("search")),0) AS b FROM "sales_rows"');
     const sb = await one('SELECT COUNT(*) AS n FROM "sales_batches"');
     let logs = 0; try { logs = (await one('SELECT COUNT(*) AS n FROM "logs"')).n || 0; } catch (e) {}
-    return { dbBytes: dbBytes, limit: 500 * 1024 * 1024, files: { n: f.n || 0, bytes: Math.round((Number(f.b) || 0) * 4 / 3) },
+    return { dbBytes: dbBytes, limit: 500 * 1024 * 1024, files: { n: (f.n || 0) - (fd.n || 0), bytes: Math.round((Number(f.b) || 0) * 4 / 3) }, drive: { n: fd.n || 0, bytes: Number(fd.b) || 0 },
       sales: { batches: sb.n || 0, rows: sr.n || 0, bytes: Number(sr.b) || 0 }, logs: logs };
   },
   // 仕入先に保存してある写真・PDFの一覧(古い順)。管理者のみ
@@ -115,15 +125,15 @@ const API = {
     if (!ctx.admin) throw fail('管理者だけが使えます');
     const reqs = await readAll(env, 'requests');
     const projs = {}; for (const p of await readAll(env, 'projects')) projs[p.id] = p;
-    const fr = (await env.DB.prepare('SELECT "id","ctype","name","size","created" FROM "files"').all()).results || [];
+    const fr = (await env.DB.prepare('SELECT "id","ctype","name","size","created","chunks" FROM "files"').all()).results || [];
     const fm = {}; for (const x of fr) fm[x.id] = x;
     const used = new Set(), out = [];
     for (const r of reqs) for (const tk of String(r.photos || '').split(',').filter(Boolean)) {
       const id = tk.split('|')[0], x = fm[id]; used.add(id);
       if (!x) continue;
-      out.push({ id: id, created: x.created, kind: tk.endsWith('|pdf') ? 'PDF' : '写真', size: Math.round(Number(x.size) || 0), vendor: r.vendor, project: (projs[r.projectId] || {}).name || '' });
+      out.push({ id: id, created: x.created, kind: tk.endsWith('|pdf') ? 'PDF' : '写真', size: Math.round(Number(x.size) || 0), vendor: r.vendor, project: (projs[r.projectId] || {}).name || '', gid: isDriveRef(x.chunks) ? driveId(x.chunks) : '' });
     }
-    for (const x of fr) if (!used.has(x.id)) out.push({ id: x.id, created: x.created, kind: '未使用', size: Math.round(Number(x.size) || 0), vendor: '', project: '' });
+    for (const x of fr) if (!used.has(x.id)) out.push({ id: x.id, created: x.created, kind: '未使用', size: Math.round(Number(x.size) || 0), vendor: '', project: '', gid: isDriveRef(x.chunks) ? driveId(x.chunks) : '' });
     out.sort((a, b) => String(a.created).localeCompare(String(b.created)));
     return out;
   },
@@ -132,7 +142,7 @@ const API = {
     if (!ctx.admin) throw fail('管理者だけが使えます');
     before = String(before || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(before)) throw fail('日付を指定してください');
-    const fr = (await env.DB.prepare('SELECT "id","size" FROM "files" WHERE "created" < ?').bind(before).all()).results || [];
+    const fr = (await env.DB.prepare('SELECT "id","size","chunks" FROM "files" WHERE "created" < ?').bind(before).all()).results || [];
     if (!fr.length) return { n: 0, bytes: 0 };
     const gone = new Set(fr.map(x => x.id));
     for (const r of await readAll(env, 'requests')) {
@@ -143,11 +153,22 @@ const API = {
     let bytes = 0;
     for (let i = 0; i < fr.length; i += 20) {
       const part = fr.slice(i, i + 20), st = [];
-      for (const x of part) { bytes += Math.round(Number(x.size) || 0); st.push(env.DB.prepare('DELETE FROM "file_chunks" WHERE "fid" = ?').bind(x.id), env.DB.prepare('DELETE FROM "files" WHERE "id" = ?').bind(x.id)); }
+      for (const x of part) { bytes += Math.round(Number(x.size) || 0); if (isDriveRef(x.chunks) && driveConfigured(env)) { try { await driveDelete(env, driveId(x.chunks)); } catch (e) { /* ドライブ側が消えていても続ける */ } } st.push(env.DB.prepare('DELETE FROM "file_chunks" WHERE "fid" = ?').bind(x.id), env.DB.prepare('DELETE FROM "files" WHERE "id" = ?').bind(x.id)); }
       await env.DB.batch(st);
     }
     await writeLog(env, ctx.email, 'op', '一括削除', '回答の写真・PDF ' + before + 'より前 ' + fr.length + '件', '');
     return { n: fr.length, bytes: bytes };
+  },
+  async driveStatus(env, ctx) {
+    if (!ctx.admin) throw fail('管理者だけが使えます');
+    return { configured: driveConfigured(env) };
+  },
+  // 接続の確認(受付口に声をかけて、保存先フォルダがあるか見る)
+  async driveTest(env, ctx) {
+    if (!ctx.admin) throw fail('管理者だけが使えます');
+    if (!driveConfigured(env)) throw fail('まだ設定されていません');
+    await drivePing(env);
+    return true;
   },
   async getLogs(env, ctx, opt) {
     if (!ctx.admin) throw fail('操作履歴を見られるのは管理者だけです');
@@ -273,7 +294,20 @@ const API = {
     if (!r) throw fail('仕入先が見つかりません');
     if (m[2].length > 8 * 1024 * 1024 * 4 / 3) throw fail('ファイルが大きすぎます（8MBまで）');
     const id = newFileId();
-    await putFile(env, id, m[1], name, m[2]);
+    let saved = false;
+    if (driveConfigured(env)) { // 連携しているときは、Googleドライブに保存する
+      try {
+        const p = (await readAll(env, 'projects', '"id" = ?', r.projectId))[0] || {};
+        const dn = (nowStr().slice(0, 10) + ' ' + [p.name, r.vendor, name].filter(Boolean).join('_')).replace(/[\\/:*?"<>|]/g, '-').slice(0, 150);
+        const gid = await driveUpload(env, dn, m[1], m[2]);
+        await env.DB.prepare('INSERT INTO "files" ("id","ctype","name","size","chunks","created") VALUES (?,?,?,?,?,?)').bind(id, m[1], String(name || ''), String(Math.floor(m[2].length * 3 / 4)), 'drive:' + gid, nowStr()).run();
+        saved = true;
+      } catch (e) {
+        console.error('drive upload', e && e.message);
+        await writeLog(env, ctx.email, 'op', '保存', 'Googleドライブに保存できなかったため、アプリ内に保存しました', '');
+      }
+    }
+    if (!saved) await putFile(env, id, m[1], name, m[2]);
     const token = isPdf ? id + '|pdf' : id;
     const ids = String(r.photos || '').split(',').filter(Boolean);
     ids.push(token);
