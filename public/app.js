@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.8.0  (2026-10-05)
+// 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -591,7 +591,9 @@ function depHtml(){
     <button onclick="depGoMonth('${depMonthAdd(M, 1)}')">翌月 ▶</button></div></div>
   <div class="card"><div class="mute" style="margin-bottom:6px">${imp}</div>
     <label class="fb">📥 スマイルの入金実績CSVを取り込む<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="depImport(this)"></label>
-    <div class="mute" style="margin-top:6px">スマイルワークスの「入金実績一覧表」をCSVで出力したものです。月の途中までのCSVでも、同じ期間をもう一度取り込めば置き換わります（入力済みの金額は消えません）。</div></div>
+    <div class="mute" style="margin-top:6px">スマイルワークスの「入金実績一覧表」をCSVで出力したものです。月の途中までのCSVでも、同じ期間をもう一度取り込めば置き換わります（入力済みの金額は消えません）。</div>
+    <div style="margin-top:12px"><label class="fb">📗 入金チェック表（Excel）の入力済みデータを取り込む<input type="file" accept=".xlsx,.xlsm" style="display:none" onchange="depImportXlsx(this)"></label></div>
+    <div class="mute" style="margin-top:6px">月ごとのシート（R8.8 など）の現金・口座・手数料の金額を、そのまま登録します。先にスマイルのCSVを取り込んでおくと、すぐ照合結果が見られます。</div></div>
   <div id="dsum">${depSumHtml()}</div>
   ${hasSmile ? '' : `<div class="card" style="border-left:4px solid #f79009"><b>${Y}年${MO}月のスマイルの入金実績がありません。</b><div class="mute">CSVを取り込むと、日ごとに自動で照合します。</div></div>`}
   <div class="row" style="margin:8px 0;align-items:center"><label style="margin:0"><input type="checkbox" style="width:auto" ${DEP.only ? 'checked' : ''} onchange="DEP.only=this.checked;depRows()"> 差異・未入力の日だけ表示</label></div>
@@ -705,6 +707,54 @@ async function depAcctSave(){
   const list = [...document.querySelectorAll('#dacc > div')].map(e => ({id: e.dataset.id, name: e.querySelector('input').value}));
   await run('depAccounts', list);
   DEP.data = null; render();
+}
+// --- 入金チェック表(Excel)の取込 ---
+// 見出しの名前の違い(昔の月の表)を、今の口座名にそろえる
+const DEP_ALIAS = {'豊信': '豊信東', '豊信2': '豊信小坂井', '豊信3': '豊信吉田方'};
+async function depImportXlsx(inp){
+  const file = inp.files[0]; inp.value = ''; if (!file) return;
+  if (typeof XLSX === 'undefined') return alert('Excelを読む部品がまだ読み込まれていません。少し待ってからもう一度お試しください。');
+  const wb = XLSX.read(await file.arrayBuffer(), {type: 'array', cellFormula: true});
+  const items = [], months = [], cols = new Set(), skipped = [];
+  for (const name of wb.SheetNames) {
+    const t = name.normalize('NFKC').replace(/\s/g, '');
+    const m = /^R(\d+)\.(\d+)$/.exec(t);
+    if (!m) { skipped.push(name.trim()); continue; }
+    const ym = (Number(m[1]) + 2018) + '-' + m[2].padStart(2, '0');
+    const ws = wb.Sheets[name], rng = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    const heads = [];
+    for (let c = 1; c <= rng.e.c; c++) { const h = ws[XLSX.utils.encode_cell({r: 0, c: c})]; heads[c] = h ? String(h.v == null ? '' : h.v).normalize('NFKC').replace(/\s/g, '') : ''; }
+    const use = [];
+    heads.forEach((h, c) => { if (h && !['計', '突合', '振込計'].includes(h)) use.push([c, DEP_ALIAS[h] || h]); });
+    const days = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5)), 0).getDate();
+    let n = 0;
+    for (let r = 1; r <= Math.min(rng.e.r, 40); r++) {
+      const dc = ws[XLSX.utils.encode_cell({r: r, c: 0})], day = dc ? Number(dc.v) : 0;
+      if (!Number.isInteger(day) || day < 1 || day > days) continue;
+      for (const [c, nm] of use) {
+        const cell = ws[XLSX.utils.encode_cell({r: r, c: c})];
+        if (!cell || cell.v === '' || cell.v == null || typeof cell.v !== 'number' || cell.v === 0) continue;
+        items.push([ym + '-' + String(day).padStart(2, '0'), nm, cell.v, cell.f ? String(cell.f) : '']); n++; cols.add(nm);
+      }
+    }
+    if (n) months.push(ym);
+  }
+  if (!items.length) return alert('取り込める入力が見つかりませんでした。シート名が「R8.8」の形の月ごとの表が必要です。');
+  months.sort();
+  const known = new Set(['現金', '手数料'].concat(DEP.data.accts.map(a => a.name)));
+  const fresh = [...cols].filter(c => !known.has(c));
+  if (!confirm('入金チェック表から ' + months.length + 'か月分（' + months[0] + ' 〜 ' + months[months.length - 1] + '）、' + items.length + '件の金額を取り込みます。\n同じ日・同じ欄に入力済みの金額は、Excelの内容で置き換わります。\n' + (fresh.length ? '新しく追加される口座: ' + fresh.join('、') + '\n' : '') + (skipped.length ? '（取り込まないシート: ' + skipped.join('、') + '）\n' : '') + 'よろしいですか？')) return;
+  busy(1);
+  try {
+    for (let i = 0; i < items.length; i += 500) {
+      $('#busy').textContent = '取込中 ' + Math.min(i + 500, items.length) + ' / ' + items.length;
+      await run('depImportCells', items.slice(i, i + 500));
+    }
+  } finally { busy(-1); $('#busy').textContent = '処理中...'; }
+  const keep = DEP.m;
+  DEP = {meta: null, m: keep, data: null, sel: null, detail: null, only: false};
+  alert('取り込みました（' + items.length + '件）');
+  go('deposit');
 }
 // --- スマイルの入金実績CSVの取込 ---
 async function depImport(inp){

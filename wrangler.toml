@@ -1,4 +1,4 @@
-# 業務管理 河村図書教材社  v2.8.0  (2026-10-05)
+# 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
 name = "mitsumori"
 main = "src/index.js"
 compatibility_date = "2025-09-01"

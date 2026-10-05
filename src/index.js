@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.8.0  (2026-10-05)
+// 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -579,6 +579,31 @@ const API = {
     for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
     return stmts.length;
   },
+  // 入金チェック表(Excel)の取込。items: [ymd, 列の名前('現金'/'手数料'/口座名), 金額, 式] 。口座名が未登録なら口座を追加する
+  async depImportCells(env, ctx, items) {
+    await ensureDep(env);
+    if (!Array.isArray(items) || items.length > 600) throw fail('一度に送れる件数を超えています');
+    const accts = await depAccts(env);
+    let changed = false;
+    const st = [];
+    for (const it of items) {
+      if (!Array.isArray(it) || !/^\d{4}-\d{2}-\d{2}$/.test(String(it[0]))) continue;
+      const name = String(it[1] || '').trim().slice(0, 20), amt = Math.round(Number(it[2]));
+      if (!name || !Number.isFinite(amt) || Math.abs(amt) > 1e11) continue;
+      let k;
+      if (name === '現金') k = 'cash'; else if (name === '手数料') k = 'fee';
+      else {
+        let a = accts.find(x => x.name === name);
+        if (!a) { if (accts.length >= 20) throw fail('口座が多すぎます(20個まで)'); a = { id: 'a' + newId().slice(0, 6), name: name }; accts.push(a); changed = true; }
+        k = a.id;
+      }
+      const ex = String(it[3] || '').replace(/\s/g, '').slice(0, 100);
+      st.push(env.DB.prepare('INSERT INTO dep_cells (ymd,k,amount,expr) VALUES (?,?,?,?) ON CONFLICT(ymd,k) DO UPDATE SET amount = excluded.amount, expr = excluded.expr').bind(String(it[0]), k, amt, /^[0-9+\-()]+$/.test(ex) && !/^-?\d+$/.test(ex) ? ex : ''));
+    }
+    if (changed) await env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('depaccts', JSON.stringify(accts)).run();
+    for (let i = 0; i < st.length; i += 50) await env.DB.batch(st.slice(i, i + 50));
+    return st.length;
+  },
   // 口座の一覧(管理者のみ変更)。list: [{id?, name}]  idのあるものは名前の変更、ないものは追加。消せるのは入力が無い口座だけ
   async depAccounts(env, ctx, list) {
     if (!ctx.admin) throw fail('口座の変更は管理者だけができます');
@@ -723,6 +748,7 @@ async function describeOp(env, fn, args, before) {
     case 'depImportBegin': return ['取込', '入金実績 ' + String(args[0] || '') + '〜' + String(args[1] || '')];
     case 'depSet': return ['入力', '入金照合 ' + String(args[0] || '') + ' ' + String(args[1] || '') + ' ' + String(args[2] || '')];
     case 'depNote': return ['更新', '入金照合のメモ ' + String(args[0] || '') + (args[2] ? '（確認済み）' : '')];
+    case 'depImportCells': return ['取込', '入金チェック表 ' + (Array.isArray(args[0]) ? args[0].length + '件' : '')];
     case 'depAccounts': return ['変更', '入金照合の口座一覧'];
     case 'ocrImage': return ['利用', '手書きの文字起こし'];
     default: return null;
