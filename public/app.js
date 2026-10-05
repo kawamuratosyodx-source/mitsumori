@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.2  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.3  (2026-10-05)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -54,7 +54,8 @@ let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],mem
 const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1, deposit: 1, backup: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
 const TABS = [['menu', '🏠 メニュー'], ['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索'], ['deposit', '💳 入金照合']];
-function tabOf(n){ return n === 'memos' ? 'memos' : n === 'deposit' ? 'deposit' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage' || n === 'backup') ? '' : 'home'; }
+let backView = null;
+function tabOf(n){ if (n === 'form' && backView && backView.n && backView.n !== 'form') n = backView.n; return n === 'memos' ? 'memos' : n === 'deposit' ? 'deposit' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage' || n === 'backup') ? '' : 'home'; }
 function tbHtml(){
   const cur = view.n === 'menu' ? 'menu' : tabOf(view.n);
   const me = DB && DB.me ? DB.me : null;
@@ -75,7 +76,7 @@ async function reload(){
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' || view.n === 'storage' || view.n === 'backup' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } { const vn = (view.n === 'form' && backView && backView.n) || view.n; document.body.dataset.sec = tabOf(view.n) || (vn === 'customers' || vn === 'vendors' || vn === 'salesimport' || vn === 'company' || vn === 'logs' || vn === 'storage' || vn === 'backup' ? 'master' : 'menu'); } $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -159,6 +160,16 @@ function driveCard(){
   <li>デプロイが終わったら、この画面を開き直して「接続を確認」を押します。</li></ol>
   <div class="mute">この画面を開き直すと、キーが変わります。手順2と6のキーは、必ず同じものを使ってください。</div></div>`;
 }
+const fmtRows = n => n >= 1000000 ? (n / 1000000).toFixed(2) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n);
+function rdHtml(rd){
+  if (!rd) return '';
+  const pct = Math.min(100, rd.today / rd.limit * 100);
+  const col = pct >= 80 ? '#b42318' : pct >= 50 ? '#e07b00' : 'var(--c)';
+  return `<div class="card"><b>今日のデータベースの読み取り</b>
+    <div style="margin:8px 0 4px;font-size:22px"><b style="color:${col}">${fmtRows(rd.today)}</b> <span class="mute" style="font-size:14px">/ ${fmtRows(rd.limit)}行（${pct.toFixed(1)}%）</span></div>
+    <div style="height:14px;background:#e5e7eb;border-radius:7px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${col}"></div></div>
+    <div class="mute" style="margin-top:8px">無料枠は1日500万行までです。使い切ると、その日はデータを読めなくなります（毎朝9時に戻ります）。アプリが数えたおよその値です。${pct >= 80 ? '<br><b style="color:#b42318">上限に近づいています。売上データ検索の使用を控えてください。</b>' : ''}</div></div>`;
+}
 const fmtB = n => n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 async function loadStorage(){
   try { ST.info = await run('getStorage'); ST.files = await run('listFiles'); ST.drive = await run('driveStatus'); } catch (e) { return; }
@@ -195,9 +206,10 @@ V.storage = () => {
     <div style="margin-top:6px">無料で使える残り: <b style="color:${col}">約 ${fmtB(left)}</b></div>
     <table style="width:100%;margin-top:10px;font-size:14px"><tr><td>📎 回答の写真・PDF（${i.files.n}件）</td><td class="n">${fmtB(i.files.bytes)}</td></tr>
     ${i.drive && i.drive.n ? `<tr><td>☁ Googleドライブに保存（${i.drive.n}件）</td><td class="n">${fmtB(i.drive.bytes)}（アプリの容量は使わない）</td></tr>` : ''}
-    <tr><td>💴 売上データ（${i.sales.batches}件・${i.sales.rows}行）</td><td class="n">${fmtB(i.sales.bytes)}</td></tr>
-    <tr><td>その他（メモ・案件・見積・操作履歴${i.logs}件など）</td><td class="n">${fmtB(other)}</td></tr></table>
-    <div class="mute" style="margin-top:8px">無料プランは、1つのデータベースが500MBまでです（Cloudflareの無料枠）。上限に近づくと、保存や取り込みができなくなります。1日あたりの読み書きの回数の上限（読み取り500万行／書き込み10万行）は、このアプリの使い方ではほぼ届きません。回数はCloudflareの管理画面で確認できます。</div></div>
+    <tr><td>💴 売上データ（${i.sales.batches}件・${i.sales.rows}行）</td><td class="n">${i.sales.approx ? '約 ' : ''}${fmtB(i.sales.bytes)}</td></tr>
+    <tr><td>その他（メモ・案件・見積・操作履歴 約${i.logs}件など）</td><td class="n">${fmtB(other)}</td></tr></table>
+    <div class="mute" style="margin-top:8px">無料プランは、1つのデータベースが500MBまでです（Cloudflareの無料枠）。上限に近づくと、保存や取り込みができなくなります。</div></div>
+  ${rdHtml(i.reads)}
   ${driveCard()}
   <div class="card"><b>過去の写真・PDFをまとめて削除</b>
     <div class="mute" style="margin:4px 0">仕入先の回答に保存した写真・PDFが対象です。見積書や案件、メモは消えません。削除したものは戻せません。${oldest ? '一番古いのは ' + oldest + ' です。' : '保存されたファイルはありません。'}</div>
@@ -361,13 +373,14 @@ let salesTimer = null, salesSeq = 0;
 function salesQ(now){
   view.sq = ($('#sq') || {}).value || ''; view.from = ($('#sfrom') || {}).value || ''; view.to = ($('#sto') || {}).value || '';
   view.dcol = Number(($('#sdcol') || {value: -1}).value); view.scol = Number(($('#sscol') || {value: -1}).value);
-  view.off = 0; clearTimeout(salesTimer); salesTimer = setTimeout(doSales, now ? 0 : 350);
+  view.off = 0; clearTimeout(salesTimer); salesTimer = setTimeout(doSales, now ? 0 : 500);
 }
 async function doSales(){
   if (!view.b) return;
   const my = ++salesSeq;
   const r = await run('salesSearch', view.b, view.sq || '', view.off || 0, {dcol: view.dcol, from: view.from, to: view.to, scol: view.scol});
   if (my !== salesSeq) return;
+  if (r.total == null && SALES.res) { r.total = SALES.res.total; r.sum = SALES.res.sum; }
   SALES.res = r; const e = $('#sres'); if (e) e.innerHTML = salesResHtml();
 }
 function salesPage(d){ view.off = Math.max(0, (view.off || 0) + d); doSales(); $('#sres').scrollIntoView(); }
@@ -486,7 +499,6 @@ V.form = () => {
   <div class="row" style="margin-top:14px"><button class="pri" onclick="submitForm()">保存</button><button onclick="history_back()">キャンセル</button><span class="sp"></span>${c.onDelete ? '<button class="dng" onclick="delForm()">削除</button>' : ''}</div></div>`;
 };
 const newLine = () => ({item:'',qty:1,unit:'式',price:0,note:'',cost:''});
-let backView = null;
 function openForm(cfg){ backView = view; go('form', {cfg: cfg}); }
 function history_back(){ view = backView || {n:'menu'}; render(); }
 async function submitForm(){
@@ -517,7 +529,12 @@ async function delForm(){
   await reload0();
   if (view.cfg.afterDelete) view.cfg.afterDelete(); else go('home');
 }
-async function reload0(){ DB = await run('getAll'); AUTH = true; }
+// 画面のデータを読み直す。前回から変わった表だけをサーバーから受け取り、通信とデータベースの読み取りを減らす
+async function reload0(){
+  const r = await run('getAll', (DB && DB.dv) || null);
+  DB = (r.part && DB) ? Object.assign({}, DB, r) : r;
+  AUTH = true;
+}
 
 // ---------- 顧客 ----------
 V.customers = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><label class="fb">スマイルワークス取込<input type="file" accept=".csv" style="display:none" onchange="importSmile(this)"></label><button class="pri" onclick="editCustomer()">＋顧客</button></div>

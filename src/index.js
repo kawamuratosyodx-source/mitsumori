@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.2  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.3  (2026-10-05)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -97,14 +97,20 @@ function fail(msg) { const e = new Error(msg); e.app = true; return e; }
 
 // ===== 機能(Apps Script版と同じ名前) =====
 const API = {
-  async getAll(env, ctx) {
+  // have: 画面が持っている版の一覧。渡されたときは、変わった表だけを返す(読み取り行数の節約)
+  async getAll(env, ctx, have) {
     await ensureSchema(env);
+    await ensureReqLines(env);
+    const dv = await dvGet(env);
+    const h = (have && typeof have === 'object') ? have : null;
+    const need = t => !h || !dv[t] || h[t] !== dv[t];
     const o = {};
     o.me = { name: ctx.email, admin: !!ctx.admin };
     o.company = await getCompany(env);
-    for (const k of Object.keys(TABLES)) o[k] = await readAll(env, k);
-    await ensureReqLines(env);
-    o.reqLines = ((await env.DB.prepare('SELECT reqId,row,item,qty,unit,note,price FROM request_lines ORDER BY reqId,row').all()).results || []).map(x => ({ reqId: x.reqId, row: Number(x.row) || 0, item: x.item || '', qty: x.qty === '' || x.qty == null ? '' : Number(x.qty), unit: x.unit || '', note: x.note || '', price: x.price === '' || x.price == null ? '' : Number(x.price) }));
+    o.dv = dv;
+    o.part = !!h;
+    for (const k of Object.keys(TABLES)) if (need(k)) o[k] = await readAll(env, k);
+    if (need('reqLines')) o.reqLines = ((await env.DB.prepare('SELECT reqId,row,item,qty,unit,note,price FROM request_lines ORDER BY reqId,row').all()).results || []).map(x => ({ reqId: x.reqId, row: Number(x.row) || 0, item: x.item || '', qty: x.qty === '' || x.qty == null ? '' : Number(x.qty), unit: x.unit || '', note: x.note || '', price: x.price === '' || x.price == null ? '' : Number(x.price) }));
     o.dbUrl = '';
     return o;
   },
@@ -118,11 +124,16 @@ const API = {
     const dbBytes = Number(t.meta && t.meta.size_after) || 0;
     const f = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN "chunks" LIKE \'drive:%\' THEN 0 ELSE CAST("size" AS INTEGER) END),0) AS b FROM "files"');
     const fd = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CAST("size" AS INTEGER)),0) AS b FROM "files" WHERE "chunks" LIKE \'drive:%\'');
-    const sr = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH("data")+LENGTH("search")),0) AS b FROM "sales_rows"');
-    const sb = await one('SELECT COUNT(*) AS n FROM "sales_batches"');
-    let logs = 0; try { logs = (await one('SELECT COUNT(*) AS n FROM "logs"')).n || 0; } catch (e) {}
+    // 売上データは件数が多いので、全部は読まない。取り込み時に数えた件数と、先頭200行から見積もった大きさを使う
+    const sb = await one('SELECT COUNT(*) AS n, COALESCE(SUM(CAST("count" AS INTEGER)),0) AS rows FROM "sales_batches"');
+    const smp = await one('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH("data")+LENGTH("search")),0) AS b FROM (SELECT "data","search" FROM "sales_rows" LIMIT 200)');
+    const srows = Number(sb.rows) || 0;
+    const sbytes = smp.n ? Math.round(Number(smp.b) / smp.n * srows) : 0;
+    // 操作履歴は古いものから消えるので、番号の幅でおよその件数が分かる(全部は読まない)
+    let logs = 0; try { const lg = await one('SELECT COALESCE(MAX(id),0) AS mx, COALESCE(MIN(id),0) AS mn FROM "logs"'); logs = lg.mx ? lg.mx - lg.mn + 1 : 0; } catch (e) {}
     return { dbBytes: dbBytes, limit: 500 * 1024 * 1024, files: { n: (f.n || 0) - (fd.n || 0), bytes: Math.round((Number(f.b) || 0) * 4 / 3) }, drive: { n: fd.n || 0, bytes: Number(fd.b) || 0 },
-      sales: { batches: sb.n || 0, rows: sr.n || 0, bytes: Number(sr.b) || 0 }, logs: logs };
+      sales: { batches: sb.n || 0, rows: srows, bytes: sbytes, approx: true }, logs: logs,
+      reads: { today: await readsToday(env), limit: 5000000 } };
   },
   // 仕入先に保存してある写真・PDFの一覧(古い順)。管理者のみ
   async listFiles(env, ctx) {
@@ -228,7 +239,7 @@ const API = {
       obj.photos = cur ? cur.photos : '';
     }
     if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); }
-    await upsertStmt(env, key, obj).run();
+    await env.DB.batch([upsertStmt(env, key, obj), bumpStmt(env, key)]);
     return obj;
   },
 
@@ -250,6 +261,7 @@ const API = {
     if (priced.length) r.amount = priced.reduce((t, l) => t + Math.round((l.qty === '' ? 1 : l.qty) * l.price), 0);
     const st = [upsertStmt(env, 'requests', r), env.DB.prepare('DELETE FROM request_lines WHERE reqId = ?').bind(r.id)];
     for (const l of ls) st.push(env.DB.prepare('INSERT INTO request_lines (reqId,row,item,qty,unit,note,price) VALUES (?,?,?,?,?,?,?)').bind(l.reqId, l.row, l.item, String(l.qty), l.unit, l.note, String(l.price)));
+    st.push(bumpStmt(env, 'requests'), bumpStmt(env, 'reqLines'));
     await env.DB.batch(st);
     return { r: r, lines: ls, isNew: !cur };
   },
@@ -275,7 +287,10 @@ const API = {
       const r = (await readAll(env, 'requests', '"id" = ?', id))[0];
       if (r) for (const t of String(r.photos || '').split(',').filter(Boolean)) { try { await deleteFile(env, t.split('|')[0]); } catch (e) { /* 既に無い */ } }
     }
-    stmts.push(delStmt(env, key, TABLES[key][0], id));
+    stmts.push(delStmt(env, key, TABLES[key][0], id), bumpStmt(env, key));
+    if (key === 'quotes') stmts.push(bumpStmt(env, 'lines'));
+    if (key === 'requests') stmts.push(bumpStmt(env, 'reqLines'));
+    if (key === 'projects') stmts.push(bumpStmt(env, 'memos'));
     await env.DB.batch(stmts);
     return true;
   },
@@ -308,6 +323,7 @@ const API = {
     }
     const stmts = [upsertStmt(env, 'quotes', q), delStmt(env, 'lines', 'quoteId', q.id)];
     ls.forEach(l => { l.quoteId = q.id; stmts.push(upsertStmt(env, 'lines', l)); });
+    stmts.push(bumpStmt(env, 'quotes'), bumpStmt(env, 'lines'));
     await env.DB.batch(stmts);
     return q;
   },
@@ -339,7 +355,7 @@ const API = {
     const token = isPdf ? id + '|pdf' : id;
     const ids = String(r.photos || '').split(',').filter(Boolean);
     ids.push(token);
-    await env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(ids.join(','), requestId).run();
+    await env.DB.batch([env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(ids.join(','), requestId), bumpStmt(env, 'requests')]);
     return token;
   },
 
@@ -347,7 +363,7 @@ const API = {
     const r = (await readAll(env, 'requests', '"id" = ?', requestId))[0];
     if (!r) return false;
     const left = String(r.photos || '').split(',').filter(x => x && x !== token);
-    await env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), requestId).run();
+    await env.DB.batch([env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), requestId), bumpStmt(env, 'requests')]);
     try { await deleteFile(env, String(token).split('|')[0]); } catch (e) { /* 既に無い */ }
     return true;
   },
@@ -424,6 +440,7 @@ const API = {
     return (r.results || []).map(b => { const m = salesMeta(b.headers); return { id: b.id, name: b.name, headers: m.h, show: m.show, dcol: m.dcol, scol: m.scol, count: Number(b.count) || 0, created: b.created, by: b.by }; });
   },
   async salesBegin(env, ctx, name, meta, replace) {
+    await salesCacheClear(env);
     name = String(name || '').trim().slice(0, 100);
     if (!name) throw fail('名前を入力してください');
     const h = meta && Array.isArray(meta.h) ? meta.h : [];
@@ -455,11 +472,13 @@ const API = {
     return rows.length;
   },
   async salesFinish(env, ctx, batchId) {
+    await salesCacheClear(env);
     const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM sales_rows WHERE batch = ?').bind(String(batchId)).first();
     await env.DB.prepare('UPDATE sales_batches SET count = ? WHERE id = ?').bind(String(c.n), String(batchId)).run();
     return c.n;
   },
   async salesDelete(env, ctx, batchId) {
+    await salesCacheClear(env);
     await env.DB.prepare('DELETE FROM sales_rows WHERE batch = ?').bind(String(batchId)).run();
     await env.DB.prepare('DELETE FROM sales_batches WHERE id = ?').bind(String(batchId)).run();
     return true;
@@ -467,6 +486,7 @@ const API = {
   // opt: {dcol, from, to, scol}  日付列での期間絞り込みと、金額列の合計
   // batchId が '*' のときは、最新のデータと見出しが同じすべてのデータをまたいで検索する
   async salesSearch(env, ctx, batchId, q, offset, opt) {
+    await guardHeavy(env, '売上データの検索');
     opt = opt || {};
     let ids = [String(batchId)], skipped = 0;
     if (batchId === '*') {
@@ -481,20 +501,59 @@ const API = {
     for (const t of terms) { where += " AND r.search LIKE ? ESCAPE '\\'"; binds.push('%' + t.replace(/[\\%_]/g, m => '\\' + m) + '%'); }
     const dcol = Number(opt.dcol), scol = Number(opt.scol);
     const ymd = v => { const m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(String(v || '').trim()); return m ? m[1] + '/' + m[2].padStart(2, '0') + '/' + m[3].padStart(2, '0') : ''; };
+    let ranged = false;
     if (Number.isInteger(dcol) && dcol >= 0 && dcol < 300) {
       const f = ymd(opt.from), t = ymd(opt.to);
-      if (f) { where += ` AND json_extract(r.data,'$[${dcol}]') >= ?`; binds.push(f); }
-      if (t) { where += ` AND json_extract(r.data,'$[${dcol}]') <= ?`; binds.push(t); }
+      if (f) { where += ` AND json_extract(r.data,'$[${dcol}]') >= ?`; binds.push(f); ranged = true; }
+      if (t) { where += ` AND json_extract(r.data,'$[${dcol}]') <= ?`; binds.push(t); ranged = true; }
     }
     const off = Math.max(0, Number(offset) || 0), LIM = 100;
     const sumExpr = Number.isInteger(scol) && scol >= 0 && scol < 300 ? `, SUM(CAST(REPLACE(json_extract(r.data,'$[${scol}]'),',','') AS REAL)) AS s` : '';
-    const agg = await env.DB.prepare('SELECT COUNT(*) AS n' + sumExpr + ' FROM sales_rows r WHERE ' + where).bind(...binds).first();
+    // 件数と合計は、表の全部を読まないと分からない(D1の読み取り行数を大きく使う)。そのため、
+    //  ・2ページ目以降は数え直さない(画面が1ページ目の件数をそのまま使う)
+    //  ・絞り込みが無く、合計も要らないときは、取り込み時に数えた件数を使う
+    //  ・同じ条件の検索は、しばらくの間は覚えておいて使い回す
+    let total = null, sum = null, cached = false;
+    const plain = !terms.length && !ranged && !sumExpr;
+    const ckey = JSON.stringify([ids, terms, dcol, opt.from || '', opt.to || '', scol]);
+    if (off === 0) {
+      if (plain) {
+        const bs = await env.DB.prepare('SELECT COALESCE(SUM(CAST("count" AS INTEGER)),0) AS n FROM sales_batches WHERE id IN (' + ids.map(() => '?').join(',') + ')').bind(...ids).first();
+        total = Number(bs && bs.n) || 0;
+      } else {
+        const hit = SCACHE.get(ckey);
+        if (hit && Date.now() - hit.at < 600000) { total = hit.total; sum = hit.sum; cached = true; }
+        else {
+          const sk = 'sc:' + hashKey(ckey);
+          const saved = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(sk).all();
+          const sv = (saved.results || [])[0];
+          let o = null;
+          if (sv) { try { const x = JSON.parse(sv.value); if (x && x.k === ckey && Date.now() - x.at < 86400000) o = x; } catch (e) {} }
+          if (o) { total = o.t; sum = o.s; cached = true; }
+          else {
+            const agg = await env.DB.prepare('SELECT COUNT(*) AS n' + sumExpr + ' FROM sales_rows r WHERE ' + where).bind(...binds).all();
+            const a0 = (agg.results || [])[0] || {};
+            total = a0.n; sum = sumExpr ? (a0.s == null ? 0 : a0.s) : null;
+            try { await env.DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(sk, JSON.stringify({ k: ckey, t: total, s: sum, at: Date.now() })).run(); } catch (e) {}
+          }
+          SCACHE.set(ckey, { total: total, sum: sum, at: Date.now() });
+          if (SCACHE.size > 60) SCACHE.clear();
+        }
+      }
+    }
+    const pkey = ckey + '|' + off;
+    const ph = PCACHE.get(pkey);
+    if (ph && Date.now() - ph.at < 600000) return { total: total == null ? ph.total : total, sum: sum == null ? ph.sum : sum, cached: true, offset: off, limit: LIM, rows: ph.rows, names: ph.names, skipped: skipped };
     const r = await env.DB.prepare('SELECT r.data AS data, b.name AS name FROM sales_rows r JOIN sales_batches b ON b.id = r.batch WHERE ' + where + ' ORDER BY b.created, r.batch, r.seq LIMIT ' + LIM + ' OFFSET ' + off).bind(...binds).all();
-    return { total: agg.n, sum: sumExpr ? (agg.s == null ? 0 : agg.s) : null, offset: off, limit: LIM, rows: (r.results || []).map(x => JSON.parse(x.data)), names: (r.results || []).map(x => x.name), skipped: skipped };
+    const rows = (r.results || []).map(x => JSON.parse(x.data)), names = (r.results || []).map(x => x.name);
+    if (PCACHE.size > 12) PCACHE.clear();
+    PCACHE.set(pkey, { rows: rows, names: names, total: total, sum: sum, at: Date.now() });
+    return { total: total, sum: sum, cached: cached, offset: off, limit: LIM, rows: rows, names: names, skipped: skipped };
   },
 
   // 税率別の売上高(月ごと)。スマイルワークスの売上CSVにある「伝票ごとの税率別合計」の列を、伝票番号で重複を除いて合計する
   async salesTax(env, ctx, batchId) {
+    await guardHeavy(env, '税率別の売上高の集計');
     let ids = [String(batchId)], skipped = 0, head;
     if (batchId === '*') {
       const all = (await env.DB.prepare('SELECT id,name,headers FROM sales_batches ORDER BY created DESC, id DESC').all()).results || [];
@@ -528,7 +587,15 @@ const API = {
     cats.forEach((c, k) => { cols.push(`${N(c.b)} AS b${k}`); if (c.t >= 0) cols.push(`${N(c.t)} AS t${k}`); });
     const sql = `SELECT substr(${J(dateI)},1,7) AS m, COUNT(*) AS slips, ${cols.join(', ')}
       FROM sales_rows WHERE id IN (SELECT MIN(id) FROM sales_rows WHERE batch IN (${inList}) GROUP BY ${J(slipI)}) GROUP BY m ORDER BY m DESC`;
-    const r = await env.DB.prepare(sql).bind(...ids).all();
+    const tkey = 'tx:' + hashKey(sql + '|' + ids.join(','));
+    let rows = null;
+    const sv = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(tkey).first();
+    if (sv) { try { rows = JSON.parse(sv.value); } catch (e) {} }
+    if (!rows) {
+      rows = ((await env.DB.prepare(sql).bind(...ids).all()).results) || [];
+      try { await env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(tkey, JSON.stringify(rows)).run(); } catch (e) {}
+    }
+    const r = { results: rows };
     const R = x => Math.round(Number(x) || 0);
     const months = (r.results || []).map(x => {
       const o = { m: x.m || '', slips: x.slips, cats: cats.map((c, k) => ({ name: c.name, plain: !!c.plain, base: R(x['b' + k]), tax: c.t >= 0 ? R(x['t' + k]) : 0 })) };
@@ -624,13 +691,18 @@ const API = {
     if (!ctx.admin) throw fail('バックアップは管理者だけが使えます');
     await ensureDep(env);
     const out = {};
-    for (const t of Object.keys(BK)) { const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM "' + t + '"' + (t === 'settings' ? " WHERE key IN ('company','depaccts')" : '')).first(); out[t] = c.n; }
+    for (const t of Object.keys(BK)) {
+      if (t === 'sales_rows') { const c = await env.DB.prepare('SELECT COALESCE(SUM(CAST("count" AS INTEGER)),0) AS n FROM sales_batches').first(); out[t] = Number(c && c.n) || 0; continue; }
+      const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM "' + t + '"' + (t === 'settings' ? " WHERE key IN ('company','depaccts')" : '')).first();
+      out[t] = c.n;
+    }
     const last = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lastbackup'").first();
     return { counts: out, last: last ? last.value : '', labels: BK_LABEL };
   },
   // 1つの表を、決まった件数ずつ取り出す
   async backupRead(env, ctx, table, offset) {
     if (!ctx.admin) throw fail('バックアップは管理者だけが使えます');
+    await guardHeavy(env, 'バックアップの作成', 4800000);
     if (!BK[table]) throw fail('対象外の表です');
     await ensureDep(env);
     const cols = BK[table], off = Math.max(0, Number(offset) || 0), LIM = table === 'sales_rows' ? 800 : 2000;
@@ -673,7 +745,6 @@ const API = {
   // 入金チェック表(Excel)の取込。items: [ymd, 列の名前('現金'/'手数料'/口座名), 金額, 式] 。口座名が未登録なら口座を追加する
   async depImportCells(env, ctx, items) {
     await ensureDep(env);
-    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     if (!Array.isArray(items) || items.length > 600) throw fail('一度に送れる件数を超えています');
     const accts = await depAccts(env);
@@ -773,6 +844,121 @@ const BK = Object.assign({}, TABLES, {
 });
 const BK_LABEL = { customers: '顧客', projects: '案件', quotes: '見積書', lines: '見積の明細', requests: '仕入先への依頼', request_lines: '仕入先への依頼の明細', memos: 'メモ', vendors: '仕入先', sales_batches: '売上データ（取込の単位）', sales_rows: '売上データ（行）', dep_rows: '入金照合：スマイルの入金', dep_cells: '入金照合：入力した金額', dep_notes: '入金照合：メモ・確認済み', settings: '会社情報・口座の一覧' };
 
+// 売上検索の件数・合計の覚え書き(メモリ上。D1の読み取り行数を減らすため)
+const SCACHE = new Map();
+// 検索結果そのものの覚え書き(同じ条件・同じページを引き直さない)
+const PCACHE = new Map();
+
+// 売上データが変わったときに、検索の件数・税率別集計の覚え書きを消す
+async function salesCacheClear(env) {
+  SCACHE.clear(); PCACHE.clear();
+  try { await env.DB.prepare("DELETE FROM settings WHERE key >= 'sc:' AND key < 'sc;'").run(); } catch (e) {}
+  try { await env.DB.prepare("DELETE FROM settings WHERE key >= 'tx:' AND key < 'tx;'").run(); } catch (e) {}
+}
+
+// ===== 読み取り行数の目安を数える =====
+// D1の無料枠は1日500万行まで。使いすぎに気づけるよう、おおよその行数を記録する
+const RD = { n: 0, flushed: 0 };
+const jstDay = () => new Date(Date.now() + JST).toISOString().slice(0, 10);
+// 1回の呼び出しが終わるたびに、増えた分を settings に足す(細かすぎる書き込みは避ける)
+async function flushReads(env) {
+  const add = RD.n - RD.flushed;
+  if (add < 2000) return;
+  RD.flushed = RD.n;
+  try {
+    await env.DB.prepare("INSERT INTO settings (key,value) VALUES ('rd',?) ON CONFLICT(key) DO UPDATE SET value = CASE WHEN substr(value,1,10) = substr(excluded.value,1,10) THEN substr(value,1,11) || CAST(CAST(substr(value,12) AS INTEGER) + ? AS TEXT) ELSE excluded.value END")
+      .bind(jstDay() + ' ' + add, add).run();
+    RDC.at = 0;
+  } catch (e) { /* 数えられなくても動作に支障はない */ }
+}
+// D1の読み書きを数えるための包み。すべての呼び出しでこれを通す
+function meterDB(real) {
+  const add = (r) => { RD.n += (r && r.meta && r.meta.rows_read) || 0; return r; };
+  const wrap = (st) => ({
+    _st: st,
+    bind: (...a) => wrap(st.bind(...a)),
+    all: async () => add(await st.all()),
+    first: async (...a) => { const r = add(await st.all()); const row = (r.results || [])[0] || null; return a.length ? (row ? row[a[0]] : null) : row; },
+    run: async () => add(await st.run()),
+  });
+  return {
+    prepare: (q) => wrap(real.prepare(q)),
+    batch: async (l) => { const r = await real.batch(l.map(x => (x && x._st) ? x._st : x)); for (const x of r) add(x); return r; },
+    exec: (...a) => real.exec(...a),
+    _real: real,
+  };
+}
+
+// ===== 使いすぎの見張り =====
+// 無料枠は1日500万行。上限に当たるとアプリ全体が止まるので、その手前で「重い機能」だけを休ませる
+const RD_LIMIT = 5000000, RD_GUARD = 4300000;
+const RDC = { n: 0, at: 0 };
+// mark: この処理を止める目安。バックアップは「いざという時」に使うので、ぎりぎりまで通す
+async function guardHeavy(env, what, mark) {
+  let n = RDC.n;
+  if (Date.now() - RDC.at > 60000) { n = await readsToday(env); RDC.n = n; RDC.at = Date.now(); }
+  if (n + RD.n - RD.flushed >= (mark || RD_GUARD)) {
+    throw fail(what + 'は、今日はお休みです。データベースの1日の読み取り（無料枠500万行）が残りわずかなため、全体が止まらないように重い処理だけを止めています。明日の朝9時に戻ります。（ほかの機能はそのまま使えます）');
+  }
+}
+async function readsToday(env) {
+  try {
+    const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'rd'").first();
+    if (!r) return 0;
+    const v = String(r.value);
+    return v.slice(0, 10) === jstDay() ? Number(v.slice(11)) || 0 : 0;
+  } catch (e) { return 0; }
+}
+
+// 短い文字列から番号を作る(検索結果の覚え書きのキー用)
+function hashKey(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + '_' + str.length.toString(36);
+}
+
+// ===== データの版(どの表が変わったか) =====
+// 画面を読み込むたびに全部の表を読むと、D1の「読み取り行数」(無料枠は1日500万行)をすぐ使い切ってしまう。
+// 表ごとに版の番号を持ち、変わっていない表は読まないようにする。
+const DVT = Object.keys(TABLES).concat(['reqLines']);
+const bumpStmt = (env, t) => env.DB.prepare("INSERT INTO settings (key,value) VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER)+1 AS TEXT)").bind('dv:' + t);
+async function bump(env, ...tables) {
+  const ts = tables.length ? tables : DVT;
+  try { await env.DB.batch(ts.map(t => bumpStmt(env, t))); } catch (e) { console.error('bump', e && e.message); }
+}
+// 操作ごとに、変わる表。ここに無い操作は、念のため全部の表を新しい版にする(= 次の読み込みで全部読み直す)
+const BUMPMAP = {
+  save: a => [String(a[0] || '')],
+  remove: a => [String(a[0] || ''), a[0] === 'quotes' ? 'lines' : a[0] === 'requests' ? 'reqLines' : ''],
+  saveQuote: () => ['quotes', 'lines'],
+  saveRequest: () => ['requests', 'reqLines'],
+  uploadPhoto: () => ['requests'],
+  removePhoto: () => ['requests'],
+  purgeFiles: () => ['requests'],
+  importCustomers: () => ['customers'],
+};
+// 表が変わらない操作(読み取りだけ、または別の置き場所を使うもの)
+const NOBUMP = new Set(['getAll', 'getStorage', 'listFiles', 'driveStatus', 'driveTest', 'getLogs', 'getCompany', 'saveCompany',
+  'changePassword', 'getQuoteBundle', 'makePdf', 'makeRequestPdf', 'makeCsv', 'ocrImage',
+  'salesBatches', 'salesBegin', 'salesAdd', 'salesFinish', 'salesDelete', 'salesSearch', 'salesTax',
+  'depMonths', 'depMonth', 'depDay', 'depSet', 'depNote', 'depImportBegin', 'depImportAdd', 'depImportCells', 'depAccounts',
+  'backupInfo', 'backupRead', 'backupDone']);
+async function bumpFor(env, fn, args) {
+  if (NOBUMP.has(fn)) return;
+  const f = BUMPMAP[fn];
+  if (!f) { await bump(env); return; }
+  const ts = f(args || []).filter(t => DVT.includes(t));
+  if (ts.length) await bump(env, ...ts);
+}
+async function dvGet(env) {
+  const o = {};
+  try {
+    const r = await env.DB.prepare("SELECT key, value FROM settings WHERE key >= 'dv:' AND key < 'dv;'").all();
+    for (const x of r.results || []) o[String(x.key).slice(3)] = String(x.value);
+  } catch (e) { /* 表がまだ無いときは全部読む */ }
+  return o;
+}
+
 // ===== 表の自動点検 =====
 // 古い版から更新したときに、足りない表・列があれば自動で足す(すでにある表やデータは変わらない)。最初の読み込みで1回だけ行う
 let schemaReady = false;
@@ -785,6 +971,7 @@ async function ensureSchema(env) {
       for (const c of TABLES[t]) if (!have.has(c)) await env.DB.prepare('ALTER TABLE "' + t + '" ADD COLUMN "' + c + '" TEXT').run();
     }
     for (const q of SCHEMA.filter(q => /^CREATE INDEX/i.test(q))) { try { await env.DB.prepare(q).run(); } catch (e) { console.error('index', e && e.message); } }
+    try { await env.DB.batch(DVT.map(t => env.DB.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES (?,'1')").bind('dv:' + t))); } catch (e) { console.error('dv', e && e.message); }
     schemaReady = true;
   } catch (e) { console.error('schema', e && e.message); }
 }
@@ -921,6 +1108,8 @@ export default {
       return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json', 'set-cookie': 'sess=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' } });
     }
 
+    // 読み取り行数を数える(無料枠の使いすぎを見張るため。アプリの動きは変わらない)
+    env = Object.create(env, { DB: { value: meterDB(env.DB) } });
     const auth = await verifyAccess(request, env);
     if (!auth.ok) return json({ ok: false, error: auth.error, login: !!auth.login }, 401);
     const ctx = { email: auth.email || '', admin: !!auth.admin };
@@ -940,11 +1129,15 @@ export default {
       if (!Object.prototype.hasOwnProperty.call(API, fn)) return json({ ok: false, error: '不明な操作です' }, 404);
       try {
         const body = await request.json();
+        const reads0 = RD.n;
         const args = Array.isArray(body.args) ? body.args : [];
+        await ensureSchema(env);
         const pre = (fn === 'remove' || fn === 'salesDelete' || fn === 'makePdf' || fn === 'makeRequestPdf') ? await beforeName(env, fn, args) : '';
         const result = await API[fn](env, ctx, ...args);
         try { const d = await describeOp(env, fn, args, pre); if (d) await writeLog(env, ctx.email, 'op', d[0], d[1], ''); } catch (e) {}
-        return json({ ok: true, result: result });
+        try { await bumpFor(env, fn, args); } catch (e) {}
+        try { await flushReads(env); } catch (e) {}
+        return json({ ok: true, result: result, __reads: RD.n - reads0 });
       } catch (e) {
         if (!e.app) { console.error(fn, e && e.stack || e); try { await writeLog(env, ctx.email, 'op', 'エラー', fn + ': ' + String(e && e.message || e).slice(0, 200), ''); } catch (e2) {} }
         return json({ ok: false, error: e.app ? e.message : 'サーバーでエラーが起きました。もう一度お試しください。（' + String(e && e.message || e).replace(/\s+/g, ' ').slice(0, 160) + '）' });
