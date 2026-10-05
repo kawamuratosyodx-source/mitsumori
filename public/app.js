@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.2  (2026-10-05)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -51,10 +51,10 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1, deposit: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1, deposit: 1, backup: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
 const TABS = [['menu', '🏠 メニュー'], ['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索'], ['deposit', '💳 入金照合']];
-function tabOf(n){ return n === 'memos' ? 'memos' : n === 'deposit' ? 'deposit' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage') ? '' : 'home'; }
+function tabOf(n){ return n === 'memos' ? 'memos' : n === 'deposit' ? 'deposit' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage' || n === 'backup') ? '' : 'home'; }
 function tbHtml(){
   const cur = view.n === 'menu' ? 'menu' : tabOf(view.n);
   const me = DB && DB.me ? DB.me : null;
@@ -75,7 +75,7 @@ async function reload(){
 }
 setTimeout(() => { if ($('#app').textContent.indexOf('読み込み中') === 0) $('#app').innerHTML += '<p class="mute">読み込みに時間がかかっています。通信状況を確認して、しばらくお待ちください。</p>'; }, 15000);
 function go(n, p){ view = Object.assign({n:n}, p || {}); try { if (HASHV[n]) history.replaceState(null, '', '#' + n); } catch (e) {} render(); window.scrollTo(0, 0); }
-function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' || view.n === 'storage' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
+function render(){ if (!AUTH) return showLogin(); document.body.classList.remove('noauth'); { const co = document.querySelector('header .co'); if (co && DB.company && DB.company.name) co.textContent = DB.company.name; } document.body.dataset.sec = tabOf(view.n) || (view.n === 'customers' || view.n === 'vendors' || view.n === 'salesimport' || view.n === 'company' || view.n === 'logs' || view.n === 'storage' || view.n === 'backup' ? 'master' : 'menu'); $('#tb').innerHTML = tbHtml(); $('#app').innerHTML = V[view.n](); if (view.n === 'project') loadThumbs(); }
 const cust = id => DB.customers.find(c => c.id === id) || {};
 const proj = id => DB.projects.find(p => p.id === id) || {};
 
@@ -106,7 +106,7 @@ V.menu = () => {
   <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
   <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div>
   <div class="card click tile" data-sec="deposit" onclick="go('deposit')"><span class="ic">💳</span><b>入金照合</b><div class="mute">スマイルの入金と実際の入金を照合</div></div></div>
-  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button>${DB.me && DB.me.admin ? `<button class="mbtn" onclick="go('logs')">操作履歴</button><button class="mbtn" onclick="go('storage')">保存容量</button>` : ''}</div>`;
+  <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button>${DB.me && DB.me.admin ? `<button class="mbtn" onclick="go('logs')">操作履歴</button><button class="mbtn" onclick="go('storage')">保存容量</button><button class="mbtn" onclick="go('backup')">バックアップ</button>` : ''}</div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
 let SALES = {batches: null, res: null};
@@ -708,6 +708,82 @@ async function depAcctSave(){
   await run('depAccounts', list);
   DEP.data = null; render();
 }
+// ---------- バックアップと復元(管理者) ----------
+let BKP = {info: null};
+V.backup = () => {
+  if (!(DB.me && DB.me.admin)) return '<div class="card">バックアップは管理者だけが使えます。</div>';
+  if (!BKP.info) { loadBackup(); return '<div class="card">読み込み中...</div>'; }
+  const i = BKP.info, L = i.labels;
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button></div>
+  <h2><span>💾 バックアップと復元</span></h2>
+  <div class="card"><b>バックアップをダウンロード</b>
+    <div class="mute" style="margin:4px 0 8px">いまの文字のデータを、1つのファイルに保存します。パソコンやGoogleドライブなど、アプリの外に置いてください。最後に保存した日時: <b>${i.last ? esc(i.last) : 'まだありません'}</b></div>
+    <table style="width:100%;font-size:14px">${Object.keys(L).map(t => `<tr><td>${esc(L[t])}</td><td class="n">${yen(i.counts[t] || 0)}件</td></tr>`).join('')}</table>
+    <div style="margin:8px 0"><label style="margin:0"><input type="checkbox" id="bk_sales" style="width:auto" checked> 売上データ（CSVの取込分）も含める</label></div>
+    <button class="pri" onclick="backupDownload()">📥 バックアップをダウンロード</button>
+    <div class="mute" style="margin-top:8px">含まないもの: 写真・PDF（Googleドライブ連携で別に保存されます）、合言葉、操作履歴。月に1回など、定期的な保存をおすすめします。</div></div>
+  <div class="card"><b>バックアップから復元</b>
+    <div class="mute" style="margin:4px 0 8px">保存したファイルを読み込んで、データをその時点に戻します。ファイルに入っている種類のデータは<b>いまの内容がすべて置き換わります</b>（その後に入力した分は消えます）。復元の直前に、いまのデータも自動でダウンロードされます。</div>
+    <label class="fb">📤 バックアップのファイルを選ぶ<input type="file" accept=".json,application/json" style="display:none" onchange="backupRestore(this)"></label></div>`;
+};
+async function loadBackup(){ try { BKP.info = await run('backupInfo'); } catch (e) { return; } if (view.n === 'backup') render(); }
+async function backupBuild(withSales){
+  const info = await run('backupInfo'), tables = {};
+  const names = Object.keys(info.labels).filter(t => withSales || !t.startsWith('sales_'));
+  let done = 0;
+  for (const t of names) {
+    let off = 0, cols = null, rows = [];
+    for (;;) {
+      $('#busy').textContent = 'バックアップ中 ' + (done + 1) + ' / ' + names.length + '（' + info.labels[t] + '）';
+      const r = await run('backupRead', t, off);
+      cols = r.cols; rows = rows.concat(r.rows);
+      if (!r.more) break; off = r.next;
+    }
+    tables[t] = {cols: cols, rows: rows}; done++;
+  }
+  const ver = (document.querySelector('.ver') || {}).textContent || '';
+  return {app: 'kawamura-gyomu', format: 1, version: ver, created: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 19).replace('T', ' '), tables: tables};
+}
+function backupName(prefix){ return prefix + new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '_') + '.json'; }
+async function backupDownload(){
+  busy(1);
+  try {
+    const obj = await backupBuild($('#bk_sales').checked);
+    dlBlob(backupName('gyomu-backup_'), new Blob([JSON.stringify(obj)], {type: 'application/json'}));
+    await run('backupDone');
+  } finally { busy(-1); $('#busy').textContent = '処理中...'; }
+  BKP.info = null; render();
+  alert('バックアップをダウンロードしました。ファイル名は gyomu-backup_日付.json です。ダウンロードのフォルダを確認し、安全な場所に保管してください。');
+}
+async function backupRestore(inp){
+  const file = inp.files[0]; inp.value = ''; if (!file) return;
+  let obj; try { obj = JSON.parse(await file.text()); } catch (e) { return alert('バックアップのファイルとして読み込めませんでした'); }
+  if (!obj || obj.app !== 'kawamura-gyomu' || !obj.tables || typeof obj.tables !== 'object') return alert('このアプリのバックアップファイルではありません');
+  const L = (BKP.info && BKP.info.labels) || (await run('backupInfo')).labels;
+  const names = Object.keys(obj.tables).filter(t => L[t]);
+  if (!names.length) return alert('復元できるデータが入っていません');
+  const sum = names.map(t => '・' + L[t] + ' ' + yen((obj.tables[t].rows || []).length) + '件').join('\n');
+  if (!confirm('「' + (obj.created || '日時不明') + '」のバックアップ（' + (obj.version || '') + '）から復元します。\n\n' + sum + '\n\n上の種類のデータは、いまの内容がすべて置き換わります。\nよろしいですか？')) return;
+  const w = prompt('最終確認です。復元を実行するには「復元」と入力してください。');
+  if (w !== '復元') return alert('復元を中止しました');
+  busy(1);
+  try {
+    // 復元の直前に、いまのデータを保存(失敗したときに戻せるように)
+    $('#busy').textContent = '復元前のデータを保存中...';
+    dlBlob(backupName('gyomu-before-restore_'), new Blob([JSON.stringify(await backupBuild(true))], {type: 'application/json'}));
+    let n = 0;
+    for (const t of names) {
+      $('#busy').textContent = '復元中 ' + (++n) + ' / ' + names.length + '（' + L[t] + '）';
+      const T = obj.tables[t], rows = T.rows || [];
+      await run('backupClear', t);
+      for (let i = 0; i < rows.length; i += 700) await run('backupWrite', t, T.cols, rows.slice(i, i + 700));
+    }
+  } finally { busy(-1); $('#busy').textContent = '処理中...'; }
+  BKP.info = null; DEP = {meta: null, m: null, data: null, sel: null, detail: null, only: false}; SALES = {batches: null, res: null};
+  await reload0(); render();
+  alert('復元しました。');
+  go('backup');
+}
 // --- 入金チェック表(Excel)の取込 ---
 // 見出しの名前の違い(昔の月の表)を、今の口座名にそろえる
 const DEP_ALIAS = {'豊信': '豊信東', '豊信2': '豊信小坂井', '豊信3': '豊信吉田方'};
@@ -933,12 +1009,13 @@ V.project = () => {
   ${(() => { const S = projSummary(p.id); if (!S) return ''; if (!S.pf.n) return `<div class="card"><b>粗利</b> <span class="mute">（${S.label}）</span><div class="mute">原価が未入力です。見積書の明細に「原価(単価)」を入れると粗利が出ます。</div></div>`; return `<div class="card"><b>粗利</b> <span class="mute">（${S.label}・税抜）</span><div class="row" style="margin-top:6px"><div class="sp">売上 ¥${yen(S.pf.rev)}<br>原価 ¥${yen(S.pf.cost)}</div><div style="text-align:right"><b style="font-size:20px">粗利 ¥${yen(S.pf.profit)}</b><br>粗利率 ${pct(S.pf.profit, S.pf.rev)}</div></div>${S.partial ? '<div class="mute" style="margin-top:4px">※原価が未入力の行があります（入力済みの' + S.pf.n + '行のみの計算）</div>' : ''}</div>`; })()}
   <h2><span>見積書</span><button class="pri" onclick="newQuote('${p.id}')">＋作成</button></h2>
   ${qs.map(q => `<div class="card"><div class="row"><b class="sp">${esc(q.no)}</b><span class="badge" style="background:${{'受注':'#e6f4ea','失注':'#fde8e8'}[q.result] || '#eee'};color:#333">${esc(q.result || '未定')}</span><b>¥${yen(q.total)}</b></div><div class="mute">${esc(q.subject)}　発行日 ${esc(q.issueDate)}</div><div class="mute">${esc(stampHtml(q))}</div>${(() => { const pf = profitOf(DB.lines.filter(l => l.quoteId === q.id)); return pf.n ? `<div class="mute">粗利 ¥${yen(pf.profit)}（${pct(pf.profit, pf.rev)}）</div>` : ''; })()}
-    <div class="row" style="margin-top:8px"><button onclick="editQuote('${q.id}')">編集</button><button onclick="dupQuote('${q.id}')">複製</button><button onclick="expPdf('${q.id}')">PDF</button><button onclick="expXlsx('${q.id}')">Excel</button><button onclick="expCsv('${q.id}')">CSV</button></div></div>`).join('') || '<p class="mute">見積書はまだありません</p>'}
+    <div class="row" style="margin-top:8px"><button onclick="editQuote('${q.id}')">編集</button><button onclick="dupQuote('${q.id}')">複製</button><button onclick="editRequest('${p.id}',null,'${q.id}')" title="この見積書の明細を、仕入先への見積依頼にコピーします">📋 仕入先に依頼</button><button onclick="expPdf('${q.id}')">PDF</button><button onclick="expXlsx('${q.id}')">Excel</button><button onclick="expCsv('${q.id}')">CSV</button></div></div>`).join('') || '<p class="mute">見積書はまだありません</p>'}
   ${compareHtml(rs)}
   ${memosOf(p.id)}
   <h2><span>仕入先（回答）</span><button class="pri" onclick="editRequest('${p.id}')">＋仕入先</button></h2>
   ${rs.map(r => `<div class="card"><div class="row"><b class="sp">${esc(r.vendor)}</b><span class="badge">${esc(r.status)}</span></div>
     <div class="mute">依頼 ${esc(r.requestedOn)} / 期限 ${esc(r.dueOn)} / 回答 ${esc(r.answeredOn) || '未'}${r.amount !== '' && r.amount != null ? ' / ¥' + yen(r.amount) : ''}</div>
+    ${reqLinesOf(r.id).length ? `<div style="margin:6px 0;font-size:13px">${reqLinesOf(r.id).map(l => `<div class="row" style="padding:2px 0"><span class="sp">${esc(l.item)}${l.qty !== '' ? ' ' + esc(l.qty) + esc(l.unit) : ''}</span>${l.price !== '' ? `<b>@¥${yen(l.price)}</b>` : '<span class="mute">単価 未回答</span>'}</div>`).join('')}</div>` : ''}
     ${r.memo ? `<div style="white-space:pre-wrap">${esc(r.memo)}</div>` : ''}
     <div class="thumbs" data-req="${r.id}">${String(r.photos || '').split(',').filter(String).map(t => t.endsWith('|pdf') ? `<div class="pdf" data-tok="${t}" data-req="${r.id}">📄<br>PDF</div>` : `<img data-tok="${t}" data-req="${r.id}" alt="">`).join('')}</div>
     <div class="row" style="margin-top:8px"><button onclick="editRequest('${p.id}','${r.id}')">編集</button><button onclick="expReqPdf('${r.id}')">依頼書PDF</button>
@@ -957,15 +1034,69 @@ function memosOf(pid){
   if (!ms.length) return '';
   return `<h2><span>関連メモ</span></h2>` + ms.map(m => `<div class="card click" onclick="editMemo('${m.id}')"><div class="row"><b class="sp">${esc(String(m.body || '').split('\n')[0].slice(0, 60))}</b><span class="badge">${esc(m.kind)}</span></div><div class="mute">${esc(String(m.updated || m.created || '').slice(0, 16))}</div></div>`).join('');
 }
-function editRequest(pid, id){
-  const vals = id ? Object.assign({}, DB.requests.find(r => r.id === id)) : {projectId: pid, requestedOn: today(), status: '依頼中'};
-  if (DB.vendors.some(v => v.name === vals.vendor)) vals.vendorPick = vals.vendor;
-  openForm({title: id ? '仕入先の編集' : '仕入先の追加', table: 'requests', vals: vals, required: 'vendor',
-    fields: [].concat(DB.vendors.length ? [{k:'vendorPick',l:'仕入先マスタから選択',t:'select',o:[['','（選ばず直接入力する）']].concat(DB.vendors.map(v => [v.name, v.name]))}] : [],
-      [{k:'vendor',l:'仕入先名（マスタから選ばない場合に入力）'},{k:'requestedOn',l:'依頼日',t:'date'},{k:'dueOn',l:'回答期限',t:'date'},{k:'answeredOn',l:'回答日',t:'date'},
-      {k:'amount',l:'回答金額（円）',t:'money'},{k:'status',l:'状態',t:'select',o:['依頼中','回答あり','辞退','採用'].map(x => [x, x])},
-      {k:'detail',l:'依頼内容（見積依頼書に印字されます）',t:'textarea'},{k:'memo',l:'社内メモ（依頼書には載りません）',t:'textarea'}]),
-    onDelete: !!id, afterDelete: () => go('project', {id: pid}), after: () => go('project', {id: pid})});
+// ---------- 仕入先への見積依頼(明細つき) ----------
+const reqLinesOf = id => (DB.reqLines || []).filter(l => l.reqId === id).sort((a, b) => a.row - b.row);
+const newReqLine = () => ({item: '', qty: 1, unit: '', note: '', price: ''});
+const quoteLinesToReq = qid => DB.lines.filter(l => l.quoteId === qid).sort((a, b) => a.row - b.row).map(l => ({item: l.item, qty: l.qty, unit: l.unit, note: l.note, price: ''}));
+// qid を渡すと、その見積書の明細(品名・数量・単位・備考)を複写して新しい依頼を作る
+function editRequest(pid, id, qid){
+  const r = id ? Object.assign({}, DB.requests.find(x => x.id === id)) : {projectId: pid, requestedOn: today(), status: '依頼中', vendor: '', dueOn: '', answeredOn: '', amount: '', detail: '', memo: ''};
+  let lines = id ? reqLinesOf(id).map(l => Object.assign({}, l)) : [];
+  if (qid) lines = quoteLinesToReq(qid);
+  if (!lines.length) lines = [newReqLine()];
+  view = {n: 'request', r: r, lines: lines};
+  render(); window.scrollTo(0, 0);
+}
+const reqPriced = () => view.lines.filter(l => String(l.item).trim() && l.price !== '' && l.price != null);
+const reqTotal = () => reqPriced().reduce((t, l) => t + Math.round((l.qty === '' || l.qty == null ? 1 : Number(l.qty) || 0) * (Number(l.price) || 0)), 0);
+function updReq(){
+  const n = reqPriced().length, e = $('#rtot'); if (!e) return;
+  e.innerHTML = n ? `回答金額（明細の合計） <b style="font-size:18px">¥${yen(reqTotal())}</b><div class="mute">回答の単価を入れた${n}行の「数量×単価」の合計です</div>` : '<span class="mute">回答の単価を入れると、回答金額を自動で計算します</span>';
+  const m = $('#ramt'); if (m) m.style.display = n ? 'none' : '';
+}
+V.request = () => {
+  const r = view.r, p = proj(r.projectId), qs = DB.quotes.filter(q => q.projectId === r.projectId);
+  return `<div class="bar"><button onclick="go('project',{id:'${r.projectId}'})">← 案件へ</button></div>
+  <div class="card"><b>${esc(cust(p.customerId).name)} / ${esc(p.name)}</b>
+  <h2 style="margin-top:8px"><span>${r.id ? '仕入先の見積依頼（編集）' : '仕入先に見積を依頼'}</span></h2>
+  ${DB.vendors.length ? `<label>仕入先マスタから選択</label><select onchange="view.r.vendor=this.value;$('#rvn').value=this.value"><option value="">（選ばず直接入力する）</option>${DB.vendors.map(v => `<option ${v.name === r.vendor ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select>` : ''}
+  <label>仕入先名</label><input id="rvn" value="${esc(r.vendor)}" oninput="view.r.vendor=this.value">
+  <div class="g" style="grid-template-columns:1fr 1fr"><div><label>依頼日</label><input type="date" value="${esc(r.requestedOn)}" oninput="view.r.requestedOn=this.value"></div>
+  <div><label>回答期限</label><input type="date" value="${esc(r.dueOn)}" oninput="view.r.dueOn=this.value"></div>
+  <div><label>回答日</label><input type="date" value="${esc(r.answeredOn)}" oninput="view.r.answeredOn=this.value"></div>
+  <div><label>状態</label><select onchange="view.r.status=this.value">${['依頼中', '回答あり', '辞退', '採用'].map(x => `<option ${r.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div></div>
+  <h2><span>見積を依頼する明細</span></h2>
+  <div class="row" style="margin-bottom:8px;align-items:center"><select id="rcq" style="flex:1;min-width:200px"><option value="">見積書の明細を複写する…</option>${qs.map(q => `<option value="${q.id}">${esc(q.no)} ${esc(q.subject)}（${DB.lines.filter(l => l.quoteId === q.id).length}行）</option>`).join('')}</select><button onclick="reqCopyFromQuote()">複写</button></div>
+  ${view.lines.map((l, i) => `<div class="ln"><input placeholder="品名" value="${esc(l.item)}" oninput="view.lines[${i}].item=this.value">
+    <div class="g" style="margin-top:6px"><input type="number" inputmode="decimal" placeholder="数量" value="${esc(l.qty)}" oninput="view.lines[${i}].qty=this.value;updReq()"><input placeholder="単位" value="${esc(l.unit)}" oninput="view.lines[${i}].unit=this.value"><input type="text" inputmode="decimal" placeholder="回答の単価" value="${esc(fmtNum(l.price))}" oninput="numIn(this,event);view.lines[${i}].price=rawNum(this.value);updReq()" oncompositionend="numIn(this);view.lines[${i}].price=rawNum(this.value);updReq()"></div>
+    <div class="row" style="margin-top:6px"><input class="sp" placeholder="備考（規格・納期の希望など）" value="${esc(l.note)}" oninput="view.lines[${i}].note=this.value"><button class="dng" onclick="reqDelLine(${i})">削除</button></div></div>`).join('')}
+  <button onclick="reqAddLine()">＋行を追加</button>
+  <div class="card tot" id="rtot" style="margin-top:12px"></div>
+  <div id="ramt"><label>回答金額（円）</label><input type="text" inputmode="numeric" value="${esc(fmtNum(r.amount))}" oninput="numIn(this,event);view.r.amount=rawNum(this.value)" oncompositionend="numIn(this);view.r.amount=rawNum(this.value)"><div class="mute">明細ごとの単価を入れない場合は、合計金額をここに入れます。</div></div>
+  <label>依頼内容（見積依頼書に印字されます）</label><textarea oninput="view.r.detail=this.value">${esc(r.detail)}</textarea>
+  <label>社内メモ（依頼書には載りません）</label><textarea oninput="view.r.memo=this.value">${esc(r.memo)}</textarea>
+  <div class="row" style="margin-top:14px"><button class="pri" onclick="saveReq()">保存</button><button onclick="go('project',{id:'${r.projectId}'})">キャンセル</button><span class="sp"></span>${r.id ? '<button class="dng" onclick="delReq()">削除</button>' : ''}</div></div>`;
+};
+setTimeout(() => { const o = new MutationObserver(() => { if (view.n === 'request') updReq(); }); o.observe(document.getElementById('app'), {childList: true}); }, 0);
+function reqAddLine(){ view.lines.push(newReqLine()); render(); }
+function reqDelLine(i){ view.lines.splice(i, 1); if (!view.lines.length) view.lines.push(newReqLine()); render(); }
+function reqCopyFromQuote(){
+  const qid = $('#rcq').value; if (!qid) return alert('複写する見積書を選んでください');
+  const add = quoteLinesToReq(qid);
+  if (!add.length) return alert('その見積書には明細がありません');
+  const cur = view.lines.filter(l => String(l.item).trim());
+  if (cur.length && !confirm('いまの明細（' + cur.length + '行）の下に、' + add.length + '行を追加します。よろしいですか？\n（キャンセルすると何も変わりません）')) return;
+  view.lines = cur.concat(add); render();
+}
+async function saveReq(){
+  const r = view.r;
+  if (!String(r.vendor).trim()) return alert('仕入先名を入力してください');
+  const saved = await run('saveRequest', r, view.lines);
+  await reload0(); go('project', {id: saved.r.projectId});
+}
+async function delReq(){
+  if (!confirm('この仕入先の依頼を削除しますか？（添付した写真・PDFも消えます）')) return;
+  const pid = view.r.projectId; await run('remove', 'requests', view.r.id); await reload0(); go('project', {id: pid});
 }
 
 // ---------- 写真 ----------
@@ -1098,7 +1229,28 @@ function dupQuote(id){
 function pickCost(i, v){
   if (v === '') return;
   const l = view.lines[i], qty = Number(l.qty) || 1;
-  l.cost = Math.round(Number(v) / qty); render();
+  // 先頭が u のものは「単価」をそのまま原価に。それ以外は回答の合計金額なので数量で割る
+  l.cost = v[0] === 'u' ? Number(v.slice(1)) : Math.round(Number(v) / qty); render();
+}
+const replyReqs = pid => DB.requests.filter(r => r.projectId === pid && reqLinesOf(r.id).some(l => l.price !== ''));
+const itemKey = t => String(t == null ? '' : t).normalize('NFKC').replace(/\s/g, '').toLowerCase();
+function applyReplyCost(){
+  const rid = $('#rcost').value, rl = reqLinesOf(rid).filter(l => l.price !== '');
+  let n = 0; const miss = [];
+  view.lines.forEach(l => {
+    if (!String(l.item).trim()) return;
+    const hit = rl.find(x => itemKey(x.item) === itemKey(l.item));
+    if (hit) { l.cost = hit.price; n++; } else miss.push(l.item);
+  });
+  render();
+  alert(n + '行の原価に、仕入先の回答の単価を入れました。' + (miss.length ? '\n\n品名が一致せず、入れられなかった行:\n・' + miss.join('\n・') : ''));
+}
+async function quoteToRequest(){
+  if (!view.lines.some(l => String(l.item).trim())) return alert('先に明細を入力してください');
+  if (!confirm('この見積書を保存して、明細（品名・数量・単位・備考）を仕入先への見積依頼にコピーします。\n原価・販売単価はコピーしません。よろしいですか？')) return;
+  const pid = view.q.projectId;
+  const q = await run('saveQuote', view.q, view.lines);
+  await reload0(); editRequest(pid, null, q.id);
 }
 function calc(){
   const sub = view.lines.reduce((s, l) => s + Math.round((Number(l.qty) || 0) * (Number(l.price) || 0)), 0);
@@ -1151,18 +1303,19 @@ V.quote = () => {
   <div class="row" style="margin-top:6px"><span class="mute">有効期限:</span><button onclick="setValid(30)">発行日から30日</button><button onclick="setValid(60)">60日</button><button onclick="setValid(90)">90日</button></div>
   <label>結果（受注・失注）</label><select onchange="view.q.result=this.value;if(this.value!=='未定'&&!view.q.resultOn)view.q.resultOn=today();if(this.value==='未定')view.q.resultOn=''">${['未定','受注','失注'].map(x => `<option ${(q.result || '未定') === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
   <label>消費税率（%）</label><select onchange="view.q.taxRate=this.value;upd()">${[10,8,0].map(r => `<option ${Number(q.taxRate) === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
-  <h2><span>明細</span></h2>
+  <h2><span>明細</span><button onclick="quoteToRequest()" title="この明細を保存して、仕入先への見積依頼にコピーします">📋 仕入先に見積を依頼</button></h2>
   <div class="card" style="background:#f8fafc"><b>仕入金額から見積金額を計算</b>
     <div class="g" style="grid-template-columns:1fr 1fr;margin-top:6px"><div><label>計算方法</label><select onchange="mk.method=this.value"><option value="markup" ${mk.method === 'markup' ? 'selected' : ''}>原価に○%上乗せ（掛け率）</option><option value="gross" ${mk.method === 'gross' ? 'selected' : ''}>粗利率○%になる価格</option></select></div>
     <div><label>率（%）</label><input type="text" inputmode="decimal" value="${esc(mk.rate)}" oninput="mk.rate=this.value"></div>
     <div><label>端数の単位</label><select onchange="mk.unit=this.value">${[1, 10, 100, 1000].map(u => `<option value="${u}" ${Number(mk.unit) === u ? 'selected' : ''}>${u}円</option>`).join('')}</select></div>
     <div><label>端数処理</label><select onchange="mk.round=this.value">${[['ceil', '切り上げ'], ['round', '四捨五入'], ['floor', '切り捨て']].map(o => `<option value="${o[0]}" ${mk.round === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div></div>
     <div class="row" style="margin-top:8px"><button class="pri" onclick="applyMarkup()">原価が入った全行の単価を計算</button></div>
+    ${replyReqs(q.projectId).length ? `<div style="margin-top:10px;border-top:1px solid #e5e7eb;padding-top:8px"><b>仕入先の回答を原価に反映</b><div class="row" style="margin-top:6px"><select id="rcost" style="flex:1;min-width:200px">${replyReqs(q.projectId).map(r => `<option value="${r.id}">${esc(r.vendor)}（${reqLinesOf(r.id).filter(l => l.price !== '').length}行に単価）</option>`).join('')}</select><button onclick="applyReplyCost()">品名が同じ行の原価に入れる</button></div></div>` : ''}
     <div class="mute" style="margin-top:4px">各行の「原価(単価)」から販売単価を計算して入れます。上乗せ: 原価×(1+率) ／ 粗利率: 原価÷(1−率)。行ごとにも「率で単価」ボタンで計算できます。</div></div>
   ${view.lines.map((l, i) => `<div class="ln"><input placeholder="品名" value="${esc(l.item)}" oninput="view.lines[${i}].item=this.value">
     <div class="g" style="margin-top:6px"><input type="number" inputmode="decimal" placeholder="数量" value="${esc(l.qty)}" oninput="view.lines[${i}].qty=this.value;upd()"><input placeholder="単位" value="${esc(l.unit)}" oninput="view.lines[${i}].unit=this.value"><input type="text" inputmode="decimal" placeholder="単価" value="${esc(fmtNum(l.price))}" oninput="numIn(this,event);view.lines[${i}].price=rawNum(this.value);upd()" oncompositionend="numIn(this);view.lines[${i}].price=rawNum(this.value);upd()" onchange="numIn(this);view.lines[${i}].price=rawNum(this.value);upd()"></div>
     <div class="g" style="margin-top:6px;grid-template-columns:1fr 2fr"><input type="text" inputmode="decimal" placeholder="原価(単価)" value="${esc(fmtNum(l.cost))}" oninput="numIn(this,event);view.lines[${i}].cost=rawNum(this.value);upd()" oncompositionend="numIn(this);view.lines[${i}].cost=rawNum(this.value);upd()" onchange="numIn(this);view.lines[${i}].cost=rawNum(this.value);upd()">
-      <select onchange="pickCost(${i},this.value)"><option value="">仕入先の回答から原価を入れる</option>${DB.requests.filter(r => r.projectId === q.projectId && r.amount !== '' && r.amount != null).map(r => `<option value="${esc(r.amount)}">${esc(r.vendor)} ¥${yen(r.amount)}</option>`).join('')}</select></div>
+      <select onchange="pickCost(${i},this.value)"><option value="">仕入先の回答から原価を入れる</option>${DB.requests.filter(r => r.projectId === q.projectId && r.amount !== '' && r.amount != null && !reqLinesOf(r.id).some(l => l.price !== '')).map(r => `<option value="${esc(r.amount)}">${esc(r.vendor)} ¥${yen(r.amount)}（合計）</option>`).join('')}${DB.requests.filter(r => r.projectId === q.projectId).map(r => reqLinesOf(r.id).filter(l => l.price !== '').map(l => `<option value="u${l.price}">${esc(r.vendor)}：${esc(l.item)} @¥${yen(l.price)}</option>`).join('')).join('')}</select></div>
     <div class="row" style="margin-top:6px"><input class="sp" placeholder="備考" value="${esc(l.note)}" oninput="view.lines[${i}].note=this.value"><button onclick="applyMarkup(${i})">率で単価</button><button class="dng" onclick="delLine(${i})">削除</button></div></div>`).join('')}
   <button onclick="addLine()">＋行を追加</button>
   <div class="card tot" id="tot" style="margin-top:12px"></div>

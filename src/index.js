@@ -1,7 +1,8 @@
-// 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.2  (2026-10-05)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
+import { SCHEMA } from './schema.js';
 import { driveConfigured, isDriveRef, driveId, drivePing, driveUpload, driveGet, driveDelete } from './gdrive.js';
 
 const JST = 9 * 3600 * 1000;
@@ -97,10 +98,13 @@ function fail(msg) { const e = new Error(msg); e.app = true; return e; }
 // ===== 機能(Apps Script版と同じ名前) =====
 const API = {
   async getAll(env, ctx) {
+    await ensureSchema(env);
     const o = {};
     o.me = { name: ctx.email, admin: !!ctx.admin };
     o.company = await getCompany(env);
     for (const k of Object.keys(TABLES)) o[k] = await readAll(env, k);
+    await ensureReqLines(env);
+    o.reqLines = ((await env.DB.prepare('SELECT reqId,row,item,qty,unit,note,price FROM request_lines ORDER BY reqId,row').all()).results || []).map(x => ({ reqId: x.reqId, row: Number(x.row) || 0, item: x.item || '', qty: x.qty === '' || x.qty == null ? '' : Number(x.qty), unit: x.unit || '', note: x.note || '', price: x.price === '' || x.price == null ? '' : Number(x.price) }));
     o.dbUrl = '';
     return o;
   },
@@ -228,6 +232,28 @@ const API = {
     return obj;
   },
 
+  // 仕入先への見積依頼の保存(明細つき)。明細に回答の単価が入っていれば、回答金額を自動で計算する
+  async saveRequest(env, ctx, r, lines) {
+    await ensureReqLines(env);
+    r = Object.assign({}, r);
+    if (!String(r.vendor || '').trim()) throw fail('仕入先名を入力してください');
+    if (!r.id) r.id = newId();
+    if (!r.created) r.created = nowStr();
+    if (!r.author) r.author = ctx.email;
+    const cur = (await readAll(env, 'requests', '"id" = ?', r.id))[0];
+    r.photos = cur ? cur.photos : '';
+    const num = v => (v === '' || v == null || !Number.isFinite(Number(v)) ? '' : Number(v));
+    const ls = (Array.isArray(lines) ? lines : []).filter(l => String((l && l.item) || '').trim() !== '').slice(0, 200).map((l, i) => ({
+      reqId: r.id, row: i + 1, item: String(l.item).slice(0, 200), qty: num(l.qty), unit: String(l.unit || '').slice(0, 20), note: String(l.note || '').slice(0, 300), price: num(l.price),
+    }));
+    const priced = ls.filter(l => l.price !== '');
+    if (priced.length) r.amount = priced.reduce((t, l) => t + Math.round((l.qty === '' ? 1 : l.qty) * l.price), 0);
+    const st = [upsertStmt(env, 'requests', r), env.DB.prepare('DELETE FROM request_lines WHERE reqId = ?').bind(r.id)];
+    for (const l of ls) st.push(env.DB.prepare('INSERT INTO request_lines (reqId,row,item,qty,unit,note,price) VALUES (?,?,?,?,?,?,?)').bind(l.reqId, l.row, l.item, String(l.qty), l.unit, l.note, String(l.price)));
+    await env.DB.batch(st);
+    return { r: r, lines: ls, isNew: !cur };
+  },
+
   async remove(env, ctx, key, id) {
     if (!TABLES[key] || key === 'lines') throw fail('invalid table');
     id = String(id);
@@ -244,6 +270,8 @@ const API = {
     }
     if (key === 'quotes') stmts.push(delStmt(env, 'lines', 'quoteId', id));
     if (key === 'requests') {
+      await ensureReqLines(env);
+      stmts.push(env.DB.prepare('DELETE FROM request_lines WHERE reqId = ?').bind(id));
       const r = (await readAll(env, 'requests', '"id" = ?', id))[0];
       if (r) for (const t of String(r.photos || '').split(',').filter(Boolean)) { try { await deleteFile(env, t.split('|')[0]); } catch (e) { /* 既に無い */ } }
     }
@@ -337,7 +365,9 @@ const API = {
     if (!r) throw fail('仕入先が見つかりません');
     const p = (await readAll(env, 'projects', '"id" = ?', r.projectId))[0] || {};
     const v = (await readAll(env, 'vendors', '"name" = ?', r.vendor))[0] || {};
-    return { name: '見積依頼書_' + r.vendor + '_' + (r.requestedOn || '') + '.pdf', html: requestHtml(r, p, v, await getCompany(env)) };
+    await ensureReqLines(env);
+    const ls = ((await env.DB.prepare('SELECT row,item,qty,unit,note FROM request_lines WHERE reqId = ? ORDER BY row').bind(requestId).all()).results || []);
+    return { name: '見積依頼書_' + r.vendor + '_' + (r.requestedOn || '') + '.pdf', html: requestHtml(r, p, v, await getCompany(env), ls) };
   },
 
   // スマイルワークス取込用CSV。文字コード(Shift_JIS)への変換は画面側で行う
@@ -511,10 +541,16 @@ const API = {
   // ===== 入金照合(スマイルワークスの入金実績CSV と 実際の入金の突き合わせ) =====
   async depMonths(env) {
     await ensureDep(env);
+    // 集計は保存しておき、取込・入力があったときだけ作り直す(読み取り行数の節約)
+    const c0 = await env.DB.prepare("SELECT value FROM settings WHERE key = 'depmeta'").first();
+    if (c0) { try { const o = JSON.parse(c0.value); o.accts = await depAccts(env); return o; } catch (e) {} }
     const r = await env.DB.prepare('SELECT substr(ymd,1,7) AS m, COUNT(*) AS n FROM dep_rows GROUP BY m ORDER BY m').all();
     const c = await env.DB.prepare('SELECT substr(ymd,1,7) AS m FROM dep_cells GROUP BY m').all();
     const mm = await env.DB.prepare('SELECT MIN(ymd) AS a, MAX(ymd) AS b, COUNT(*) AS n FROM dep_rows').first();
-    return { months: r.results || [], entered: (c.results || []).map(x => x.m), from: mm && mm.a || '', to: mm && mm.b || '', n: mm ? mm.n : 0, accts: await depAccts(env) };
+    const o = { months: r.results || [], entered: (c.results || []).map(x => x.m), from: mm && mm.a || '', to: mm && mm.b || '', n: mm ? mm.n : 0 };
+    await env.DB.prepare("INSERT INTO settings (key,value) VALUES ('depmeta',?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify(o)).run();
+    o.accts = await depAccts(env);
+    return o;
   },
   async depMonth(env, ctx, m) {
     await ensureDep(env);
@@ -535,6 +571,7 @@ const API = {
   // 1マスの入力。式(例 5000+3840)も受け付ける。空にするとそのマスを消す
   async depSet(env, ctx, ymd, k, expr) {
     await ensureDep(env);
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     ymd = String(ymd); k = String(k);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw fail('日付が正しくありません');
     const ok = k === 'cash' || k === 'fee' || (await depAccts(env)).some(a => a.id === k);
@@ -562,6 +599,7 @@ const API = {
   async depImportBegin(env, ctx, from, to) {
     await ensureDep(env);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(from)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to))) throw fail('期間が正しくありません');
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     await env.DB.prepare('DELETE FROM dep_rows WHERE ymd >= ? AND ymd <= ?').bind(String(from), String(to)).run();
     return true;
   },
@@ -569,6 +607,7 @@ const API = {
   async depImportAdd(env, ctx, rows) {
     await ensureDep(env);
     if (!Array.isArray(rows) || rows.length > 500) throw fail('一度に送れる行数を超えています');
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     const I = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
     const stmts = [];
     for (const r of rows) {
@@ -579,9 +618,63 @@ const API = {
     for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
     return stmts.length;
   },
+  // ===== バックアップと復元(管理者のみ) =====
+  // 文字のデータ(顧客・案件・見積・メモ・仕入先・入金照合・売上データ・会社情報)を対象にする。写真・PDF、合言葉、操作履歴は含まない
+  async backupInfo(env, ctx) {
+    if (!ctx.admin) throw fail('バックアップは管理者だけが使えます');
+    await ensureDep(env);
+    const out = {};
+    for (const t of Object.keys(BK)) { const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM "' + t + '"' + (t === 'settings' ? " WHERE key IN ('company','depaccts')" : '')).first(); out[t] = c.n; }
+    const last = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lastbackup'").first();
+    return { counts: out, last: last ? last.value : '', labels: BK_LABEL };
+  },
+  // 1つの表を、決まった件数ずつ取り出す
+  async backupRead(env, ctx, table, offset) {
+    if (!ctx.admin) throw fail('バックアップは管理者だけが使えます');
+    if (!BK[table]) throw fail('対象外の表です');
+    await ensureDep(env);
+    const cols = BK[table], off = Math.max(0, Number(offset) || 0), LIM = table === 'sales_rows' ? 800 : 2000;
+    const where = table === 'settings' ? " WHERE key IN ('company','depaccts')" : '';
+    const r = await env.DB.prepare('SELECT ' + cols.map(c => '"' + c + '"').join(',') + ' FROM "' + table + '"' + where + ' ORDER BY rowid LIMIT ' + (LIM + 1) + ' OFFSET ' + off).all();
+    const rows = (r.results || []).map(o => cols.map(c => o[c]));
+    return { cols: cols, rows: rows.slice(0, LIM), more: rows.length > LIM, next: off + LIM };
+  },
+  async backupDone(env, ctx) {
+    if (!ctx.admin) throw fail('バックアップは管理者だけが使えます');
+    await env.DB.prepare("INSERT INTO settings (key,value) VALUES ('lastbackup',?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(nowStr() + ' ' + (ctx.email || '')).run();
+    return true;
+  },
+  // 復元: 表ごとに、いったん空にしてから入れ直す
+  async backupClear(env, ctx, table) {
+    if (!ctx.admin) throw fail('復元は管理者だけができます');
+    if (!BK[table]) throw fail('対象外の表です');
+    await ensureDep(env);
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
+    if (table === 'settings') await env.DB.prepare("DELETE FROM settings WHERE key IN ('company','depaccts')").run();
+    else await env.DB.prepare('DELETE FROM "' + table + '"').run();
+    return true;
+  },
+  async backupWrite(env, ctx, table, cols, rows) {
+    if (!ctx.admin) throw fail('復元は管理者だけができます');
+    if (!BK[table]) throw fail('対象外の表です');
+    if (!Array.isArray(cols) || cols.join('|') !== BK[table].join('|')) throw fail('バックアップの形式が今のアプリと合いません（' + table + '）');
+    if (!Array.isArray(rows) || rows.length > 800) throw fail('一度に送れる行数を超えています');
+    const sql = 'INSERT OR REPLACE INTO "' + table + '" (' + cols.map(c => '"' + c + '"').join(',') + ') VALUES (' + cols.map(() => '?').join(',') + ')';
+    const st = [];
+    for (const r of rows) {
+      if (!Array.isArray(r) || r.length !== cols.length) throw fail('バックアップのデータが壊れています（' + table + '）');
+      if (table === 'settings' && !['company', 'depaccts'].includes(r[0])) continue;
+      st.push(env.DB.prepare(sql).bind(...r.map(v => (v === undefined ? null : typeof v === 'object' && v !== null ? JSON.stringify(v) : v))));
+    }
+    for (let i = 0; i < st.length; i += 50) await env.DB.batch(st.slice(i, i + 50));
+    return st.length;
+  },
+
   // 入金チェック表(Excel)の取込。items: [ymd, 列の名前('現金'/'手数料'/口座名), 金額, 式] 。口座名が未登録なら口座を追加する
   async depImportCells(env, ctx, items) {
     await ensureDep(env);
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
     if (!Array.isArray(items) || items.length > 600) throw fail('一度に送れる件数を超えています');
     const accts = await depAccts(env);
     let changed = false;
@@ -668,10 +761,48 @@ async function bundle(env, quoteId) {
 }
 
 
+// ===== バックアップの対象 =====
+const BK = Object.assign({}, TABLES, {
+  request_lines: ['reqId', 'row', 'item', 'qty', 'unit', 'note', 'price'],
+  sales_batches: ['id', 'name', 'headers', 'count', 'created', 'by'],
+  sales_rows: ['batch', 'seq', 'data', 'search'],
+  dep_rows: ['ymd', 'slip', 'code', 'name', 'amount', 'cash', 'bank', 'fee', 'off'],
+  dep_cells: ['ymd', 'k', 'amount', 'expr'],
+  dep_notes: ['ymd', 'note', 'ok', 'by', 'at'],
+  settings: ['key', 'value'],
+});
+const BK_LABEL = { customers: '顧客', projects: '案件', quotes: '見積書', lines: '見積の明細', requests: '仕入先への依頼', request_lines: '仕入先への依頼の明細', memos: 'メモ', vendors: '仕入先', sales_batches: '売上データ（取込の単位）', sales_rows: '売上データ（行）', dep_rows: '入金照合：スマイルの入金', dep_cells: '入金照合：入力した金額', dep_notes: '入金照合：メモ・確認済み', settings: '会社情報・口座の一覧' };
+
+// ===== 表の自動点検 =====
+// 古い版から更新したときに、足りない表・列があれば自動で足す(すでにある表やデータは変わらない)。最初の読み込みで1回だけ行う
+let schemaReady = false;
+async function ensureSchema(env) {
+  if (schemaReady) return;
+  try {
+    await env.DB.batch(SCHEMA.filter(q => /^CREATE TABLE/i.test(q)).map(q => env.DB.prepare(q)));
+    for (const t of Object.keys(TABLES)) {
+      const have = new Set(((await env.DB.prepare('PRAGMA table_info("' + t + '")').all()).results || []).map(x => x.name));
+      for (const c of TABLES[t]) if (!have.has(c)) await env.DB.prepare('ALTER TABLE "' + t + '" ADD COLUMN "' + c + '" TEXT').run();
+    }
+    for (const q of SCHEMA.filter(q => /^CREATE INDEX/i.test(q))) { try { await env.DB.prepare(q).run(); } catch (e) { console.error('index', e && e.message); } }
+    schemaReady = true;
+  } catch (e) { console.error('schema', e && e.message); }
+}
+
 // ===== 入金照合のしたく =====
 const DEP_DEFAULT = ['UFJ', 'JA', '蒲信', '蒲信当座', '豊信東', '豊信小坂井', '豊信吉田方', '川信', '商工', 'ゆうちょ'];
 let depReady = false;
+let rlReady = false;
+async function ensureReqLines(env) {
+  if (rlReady) return;
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS request_lines (reqId TEXT, row INTEGER, item TEXT, qty TEXT, unit TEXT, note TEXT, price TEXT)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS request_lines_req ON request_lines (reqId)'),
+  ]);
+  rlReady = true;
+}
 async function ensureDep(env) {
+  await ensureReqLines(env);
   if (depReady) return;
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS "settings" ("key" TEXT PRIMARY KEY, "value" TEXT)').run();
   await env.DB.batch([
@@ -739,6 +870,7 @@ async function describeOp(env, fn, args, before) {
     case 'removePhoto': return ['削除', '仕入先の回答ファイル'];
     case 'makePdf': return ['出力', '見積書PDF ' + (before || '')];
     case 'makeCsv': return ['出力', '見積書CSV ' + (Array.isArray(args[0]) ? args[0].length + '件' : '')];
+    case 'saveRequest': { const r = args[0] || {}; return [(r.id ? '更新' : '追加'), '仕入先への見積依頼 ' + String(r.vendor || '') + '（' + (Array.isArray(args[1]) ? args[1].filter(l => l && String(l.item || '').trim()).length : 0) + '行）']; }
     case 'makeRequestPdf': return ['出力', '見積依頼書PDF ' + (before || '')];
     case 'importCustomers': return ['取込', '顧客CSV ' + (Array.isArray(args[0]) ? args[0].length + '行' : '')];
     case 'salesBegin': return ['取込', '売上データ ' + String(args[0] || '')];
@@ -749,6 +881,8 @@ async function describeOp(env, fn, args, before) {
     case 'depSet': return ['入力', '入金照合 ' + String(args[0] || '') + ' ' + String(args[1] || '') + ' ' + String(args[2] || '')];
     case 'depNote': return ['更新', '入金照合のメモ ' + String(args[0] || '') + (args[2] ? '（確認済み）' : '')];
     case 'depImportCells': return ['取込', '入金チェック表 ' + (Array.isArray(args[0]) ? args[0].length + '件' : '')];
+    case 'backupDone': return ['出力', 'バックアップ'];
+    case 'backupClear': return ['復元', 'バックアップから復元 ' + String(args[0] || '')];
     case 'depAccounts': return ['変更', '入金照合の口座一覧'];
     case 'ocrImage': return ['利用', '手書きの文字起こし'];
     default: return null;
@@ -812,8 +946,8 @@ export default {
         try { const d = await describeOp(env, fn, args, pre); if (d) await writeLog(env, ctx.email, 'op', d[0], d[1], ''); } catch (e) {}
         return json({ ok: true, result: result });
       } catch (e) {
-        if (!e.app) console.error(fn, e && e.stack || e);
-        return json({ ok: false, error: e.app ? e.message : 'サーバーでエラーが起きました。もう一度お試しください。' });
+        if (!e.app) { console.error(fn, e && e.stack || e); try { await writeLog(env, ctx.email, 'op', 'エラー', fn + ': ' + String(e && e.message || e).slice(0, 200), ''); } catch (e2) {} }
+        return json({ ok: false, error: e.app ? e.message : 'サーバーでエラーが起きました。もう一度お試しください。（' + String(e && e.message || e).replace(/\s+/g, ' ').slice(0, 160) + '）' });
       }
     }
     return json({ ok: false, error: 'not found' }, 404);

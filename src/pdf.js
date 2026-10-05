@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.8.1  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.2  (2026-10-05)
 import { CONFIG } from './config.js';
 
 export const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -38,7 +38,9 @@ export function quoteHtml(b, co) {
   return wrap('見積書 ' + b.q.no, body);
 }
 
-export function requestHtml(r, p, v, co) {
+export function requestHtml(r, p, v, co, lines) {
+  lines = Array.isArray(lines) ? lines : [];
+  const lt = lines.length ? '<table style="margin:10px 0"><tr><th style="width:7%">No</th><th>品名</th><th style="width:13%">数量</th><th style="width:11%">単位</th><th style="width:24%">備考</th><th style="width:17%">御見積単価</th></tr>' + lines.map(l => '<tr><td class="r">' + esc(l.row) + '</td><td>' + esc(l.item) + '</td><td class="r">' + esc(l.qty) + '</td><td>' + esc(l.unit) + '</td><td>' + esc(l.note) + '</td><td></td></tr>').join('') + '</table>' : '';
   const body =
     '<h1>見 積 依 頼 書</h1>' +
     '<p class="r">依頼日: ' + esc(r.requestedOn) + '</p>' +
@@ -47,7 +49,7 @@ export function requestHtml(r, p, v, co) {
     '<p>下記の件につきまして、御見積をお願い申し上げます。</p>' +
     '<table><tr><th style="width:22%;text-align:left">件名</th><td>' + esc(p.name) + '</td></tr>' +
     '<tr><th style="text-align:left">回答期限</th><td>' + esc(r.dueOn) + '</td></tr>' +
-    '<tr><th style="text-align:left">依頼内容</th><td style="height:260px;vertical-align:top">' + esc(r.detail).replace(/\n/g, '<br>') + '</td></tr></table>' +
+    '<tr><th style="text-align:left">依頼内容</th><td style="height:' + (lines.length ? '90px' : '260px') + ';vertical-align:top">' + esc(r.detail).replace(/\n/g, '<br>') + '</td></tr></table>' + lt +
     '<p>ご多忙のところ恐れ入りますが、よろしくお願い申し上げます。</p>';
   return wrap('見積依頼書 ' + r.vendor, body);
 }
