@@ -27,6 +27,7 @@ window.addEventListener('error', function(e){
 body[data-sec=memos]{--c:#e07b00;--cd:#a85a00;--cl:#fdeedb;--bg:#fff8f0}
 body[data-sec=home]{--c:#1f6feb;--cd:#154aa3;--cl:#e3eeff;--bg:#f2f7ff}
 body[data-sec=sales]{--c:#1a9b6c;--cd:#116b49;--cl:#dcf5ea;--bg:#f1faf6}
+body[data-sec=deposit]{--c:#0e9384;--cd:#0b6b61;--cl:#d5f5f0;--bg:#f0faf8}
 body[data-sec=master]{--c:#7a4fc2;--cd:#573691;--cl:#eee6fa;--bg:#f8f5fd}
 body{margin:0;font-family:-apple-system,"Hiragino Sans","Yu Gothic",Meiryo,sans-serif;background:var(--bg);transition:background .2s;color:#1f2937;font-size:15px}
 #top{position:sticky;top:0;z-index:5}
@@ -34,13 +35,13 @@ header{background:var(--c);transition:background .2s;color:#fff;padding:10px 14p
 nav#tb{background:var(--cd);display:flex;gap:6px;padding:6px 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
 nav#tb .tg{display:flex;flex:none;border-radius:8px;background:rgba(255,255,255,.14);overflow:hidden;box-shadow:inset 0 -3px 0 var(--tc)}
 nav#tb .tg.on{background:var(--tc);box-shadow:0 0 0 2px #fff}
-nav#tb .tg[data-sec=menu]{--tc:#5b6b82}nav#tb .tg.out{margin-left:auto;background:rgba(255,255,255,.08);box-shadow:none}nav#tb .tg.out a{font-size:13px}nav#tb .tg[data-sec=memos]{--tc:#e07b00}nav#tb .tg[data-sec=home]{--tc:#1f6feb}nav#tb .tg[data-sec=sales]{--tc:#1a9b6c}
+nav#tb .tg[data-sec=menu]{--tc:#5b6b82}nav#tb .tg.out{margin-left:auto;background:rgba(255,255,255,.08);box-shadow:none}nav#tb .tg.out a{font-size:13px}nav#tb .tg[data-sec=memos]{--tc:#e07b00}nav#tb .tg[data-sec=home]{--tc:#1f6feb}nav#tb .tg[data-sec=sales]{--tc:#1a9b6c}nav#tb .tg[data-sec=deposit]{--tc:#0e9384}
 nav#tb a{color:#fff;text-decoration:none;font-size:14px;padding:7px 12px;white-space:nowrap;display:block}
 nav#tb a.x{padding:7px 9px;font-size:12px;opacity:.75;border-left:1px solid rgba(255,255,255,.2)}
 nav#tb a:hover{background:rgba(255,255,255,.15)}
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
 .tiles .tile{margin:0;padding:14px 8px;text-align:center;border-top:5px solid var(--tc);background:var(--tl)}
-.tiles .tile[data-sec=memos]{--tc:#e07b00;--tl:#fff4e6}.tiles .tile[data-sec=home]{--tc:#1f6feb;--tl:#eaf2ff}.tiles .tile[data-sec=sales]{--tc:#1a9b6c;--tl:#e7f8f0}
+.tiles .tile[data-sec=memos]{--tc:#e07b00;--tl:#fff4e6}.tiles .tile[data-sec=home]{--tc:#1f6feb;--tl:#eaf2ff}.tiles .tile[data-sec=sales]{--tc:#1a9b6c;--tl:#e7f8f0}.tiles .tile[data-sec=deposit]{--tc:#0e9384;--tl:#e1f7f4}
 .mbtn{border:1px solid #cbb8ec;background:#f3ecfc;color:#573691}
 main h2{border-left:5px solid var(--c);padding-left:8px}
 .badge{background:var(--cl);color:var(--cd)}
@@ -83,14 +84,24 @@ label.fb{display:inline-block;margin:0;padding:9px 13px;border:1px solid #c5cad3
 #busy{display:none;position:fixed;top:104px;right:12px;background:#111;color:#fff;padding:6px 12px;border-radius:6px;font-size:13px;z-index:30}
 table th,table td{padding:5px 8px;border-bottom:1px solid #e5e7eb}td.n{text-align:right}
 body.noauth #tb{display:none}
+body[data-sec=deposit] main{max-width:1500px}
+table.dt{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%}
+table.dt th{background:#f3f4f6;position:sticky;top:0;white-space:nowrap;font-size:12px}
+table.dt td.ci{padding:2px}
+table.dt .sk{position:sticky;left:0;background:#fff;z-index:1}table.dt th.sk{background:#f3f4f6;z-index:2}
+input.dc{width:70px;text-align:right;padding:5px 6px;margin:0;font-size:13px;border:1px solid #e5e7eb;border-radius:6px}
+input.dc:focus{outline:2px solid var(--c);background:#fffef5}
+table.dt tr.bad td{background:#fff1f0}table.dt tr.bad td.sk{background:#fff1f0}table.dt tr.todo td{background:#fffaeb}table.dt tr.todo td.sk{background:#fffaeb}table.dt tr.ok td{background:#eff8ff}table.dt tr.ok td.sk{background:#eff8ff}
+table.dt tr.det td{background:#f9fafb;white-space:normal}
+button.sm{font-size:11px;padding:2px 8px;margin-left:4px}
 </style>
 </head>
 <body>
-<div id="top"><header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2.7.0</span><button onclick="reload()">更新</button></header>
+<div id="top"><header><h1 onclick="go('menu')">業務管理</h1><span class="co">有限会社　河村図書教材社</span><span class="ver">v2.8.0</span><button onclick="reload()">更新</button></header>
 <nav id="tb"></nav></div>
 <main id="app">読み込み中...</main>
 <div id="ov"><img id="ovimg"><div id="pdfbox"></div><div class="row"><button id="ovdl" style="display:none">PDFをダウンロード</button><button id="ovdel" class="dng">削除</button><button onclick="closeOv()">閉じる</button></div></div>
 <div id="busy">処理中...</div>
-<script src="/app.js?v=2.7.0" defer></script>
+<script src="/app.js?v=2.8.0" defer></script>
 </body>
 </html>

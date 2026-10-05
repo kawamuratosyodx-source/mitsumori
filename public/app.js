@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.7.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.8.0  (2026-10-05)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -51,10 +51,10 @@ function showLogin(){
   try { $('#lgn').value = localStorage.getItem('lgn') || ''; } catch (e) {}
 }
 let DB = {customers:[],projects:[],quotes:[],lines:[],requests:[],vendors:[],memos:[]};
-const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1};
+const HASHV = {menu: 1, memos: 1, home: 1, sales: 1, report: 1, customers: 1, vendors: 1, salesimport: 1, company: 1, salestax: 1, logs: 1, storage: 1, deposit: 1};
 let view = {n: HASHV[location.hash.slice(1)] ? location.hash.slice(1) : 'menu'};
-const TABS = [['menu', '🏠 メニュー'], ['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索']];
-function tabOf(n){ return n === 'memos' ? 'memos' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage') ? '' : 'home'; }
+const TABS = [['menu', '🏠 メニュー'], ['memos', '📝 メモ帳'], ['home', '📄 見積管理'], ['sales', '💴 売上データ検索'], ['deposit', '💳 入金照合']];
+function tabOf(n){ return n === 'memos' ? 'memos' : n === 'deposit' ? 'deposit' : (n === 'sales' || n === 'salestax') ? 'sales' : (n === 'menu' || n === 'customers' || n === 'vendors' || n === 'salesimport' || n === 'company' || n === 'logs' || n === 'storage') ? '' : 'home'; }
 function tbHtml(){
   const cur = view.n === 'menu' ? 'menu' : tabOf(view.n);
   const me = DB && DB.me ? DB.me : null;
@@ -104,7 +104,8 @@ V.menu = () => {
   return `<div class="tiles">
   <div class="card click tile" data-sec="memos" onclick="go('memos')"><span class="ic">📝</span><b>メモ帳</b><div class="mute">問い合わせ・注文・連絡事項</div>${open ? `<div><span class="badge" style="background:#fde8e8;color:#b42318">未完了 ${open}件</span></div>` : ''}</div>
   <div class="card click tile" data-sec="home" onclick="go('home')"><span class="ic">📄</span><b>見積管理</b><div class="mute">見積・案件・仕入先・集計</div><div class="mute">案件 ${DB.projects.length}件</div></div>
-  <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div></div>
+  <div class="card click tile" data-sec="sales" onclick="go('sales')"><span class="ic">💴</span><b>売上データ検索</b><div class="mute">売上CSVを取り込んで検索</div></div>
+  <div class="card click tile" data-sec="deposit" onclick="go('deposit')"><span class="ic">💳</span><b>入金照合</b><div class="mute">スマイルの入金と実際の入金を照合</div></div></div>
   <h2><span>マスタ</span></h2><div class="row"><button class="mbtn" onclick="go('customers')">顧客</button><button class="mbtn" onclick="go('vendors')">仕入先</button><button class="mbtn" onclick="go('salesimport')">売上データ取込</button><button class="mbtn" onclick="go('company')">会社情報</button>${DB.me && DB.me.admin ? `<button class="mbtn" onclick="go('logs')">操作履歴</button><button class="mbtn" onclick="go('storage')">保存容量</button>` : ''}</div>`;
 };
 // ---------- 売上データ(CSV取込・検索) ----------
@@ -529,6 +530,218 @@ function custListHtml(){
     (all.length > 200 ? `<p class="mute">${all.length}件中200件を表示しています。検索で絞り込んでください。</p>` : '') || '<p class="mute">該当する顧客がありません</p>';
 }
 function searchCust(v){ view.cq = v; $('#clist').innerHTML = custListHtml(); }
+
+// ---------- 入金照合(スマイルの入金実績 と 実際の入金の突き合わせ) ----------
+let DEP = {meta: null, m: null, data: null, sel: null, detail: null, only: false};
+const depMonthAdd = (m, d) => { const [y, mo] = m.split('-').map(Number); const t = new Date(y, mo - 1 + d, 1); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0'); };
+const depNorm = v => String(v == null ? '' : v).normalize('NFKC').replace(/[,\s]/g, '').replace(/^=/, '');
+function depKeys(){ return [{k: 'cash', n: '現金'}].concat(DEP.data.accts.map(a => ({k: a.id, n: a.name})), [{k: 'fee', n: '手数料'}]); }
+function depIndex(){ // 日ごとに引きやすい形にする
+  const D = DEP.data; DEP.sm = {}; DEP.cm = {}; DEP.nt = {};
+  D.smile.forEach(x => DEP.sm[Number(x.ymd.slice(8))] = x);
+  D.cells.forEach(x => { const d = Number(x.ymd.slice(8)); (DEP.cm[d] = DEP.cm[d] || {})[x.k] = {amount: x.amount, expr: x.expr || ''}; });
+  D.notes.forEach(x => DEP.nt[Number(x.ymd.slice(8))] = x);
+}
+function depCalc(d){
+  const s = DEP.sm[d] || {n: 0, amount: 0, cash: 0, bank: 0, fee: 0, off: 0}, c = DEP.cm[d] || {}, nt = DEP.nt[d];
+  const S = s.cash + s.bank + s.fee;
+  let E = 0, any = false, cashE = 0;
+  Object.keys(c).forEach(k => { E += c[k].amount; any = true; if (k === 'cash') cashE = c[k].amount; });
+  const diff = E - S;
+  let st = 'none';
+  if (s.n || any) {
+    if (diff === 0 && (any || S === 0)) st = (any && cashE !== s.cash) ? 'split' : 'match';
+    else if (!any) st = 'todo';
+    else st = 'diff';
+  }
+  const ok = !!(nt && nt.ok);
+  return {s: s, S: S, E: E, any: any, diff: diff, st: st, ok: ok, note: nt ? nt.note : ''};
+}
+const DEP_LABEL = {match: ['✓ 一致', '#067647'], split: ['✓ 一致（現金と振込の内訳が違う）', '#b54708'], todo: ['未入力', '#b54708'], diff: ['差異', '#b42318'], none: ['', '#6b7280']};
+function depStatusHtml(r){
+  if (r.ok && r.st !== 'match') return '<span style="color:#175cd3;font-weight:600">確認済み</span>' + (r.diff ? ' <span class="mute">(' + (r.diff > 0 ? '+' : '') + yen(r.diff) + ')</span>' : '');
+  const l = DEP_LABEL[r.st];
+  return r.st === 'diff' ? '<span style="color:' + l[1] + ';font-weight:600">差異 ' + (r.diff > 0 ? '+' : '') + yen(r.diff) + '</span>' : '<span style="color:' + l[1] + '">' + l[0] + '</span>';
+}
+const depBad = r => (r.st === 'diff' || r.st === 'todo') && !r.ok;
+V.deposit = () => {
+  if (!DEP.meta) { loadDepMeta(); return '<div class="card">読み込み中...</div>'; }
+  if (!DEP.m) {
+    const all = DEP.meta.months.map(x => x.m).concat(DEP.meta.entered).sort();
+    DEP.m = all.length ? all[all.length - 1] : today().slice(0, 7);
+  }
+  if (!DEP.data || DEP.data.m !== DEP.m) { loadDepMonth(); return '<div class="card">読み込み中...</div>'; }
+  depIndex();
+  return depHtml();
+};
+async function loadDepMeta(){ try { DEP.meta = await run('depMonths'); } catch (e) { return; } if (view.n === 'deposit') render(); }
+async function loadDepMonth(){ const m = DEP.m; try { const d = await run('depMonth', m); if (DEP.m !== m) return; DEP.data = d; } catch (e) { return; } if (view.n === 'deposit') render(); }
+function depGoMonth(m){ if (!/^\d{4}-\d{2}$/.test(m)) return; DEP.m = m; DEP.data = null; DEP.sel = null; DEP.detail = null; render(); }
+function depHtml(){
+  const M = DEP.m, [Y, MO] = M.split('-').map(Number), meta = DEP.meta, ks = depKeys();
+  const wareki = Y >= 2019 ? '令和' + (Y - 2018) + '年' : '';
+  const hasSmile = DEP.data.smile.length > 0;
+  const imp = meta.n ? `取込済み: ${meta.from.replace(/-/g, '/')} 〜 ${meta.to.replace(/-/g, '/')}（${yen(meta.n)}件）` : 'まだスマイルの入金実績を取り込んでいません';
+  const admin = DB.me && DB.me.admin;
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span></div>
+  <h2><span>💳 入金照合</span></h2>
+  <div class="card"><div class="row" style="align-items:center">
+    <button onclick="depGoMonth('${depMonthAdd(M, -1)}')">◀ 前月</button>
+    <div class="sp" style="text-align:center"><b style="font-size:18px">${Y}年${MO}月</b><span class="mute"> ${wareki}${MO}月分</span><div><input type="month" value="${M}" onchange="depGoMonth(this.value)" style="width:auto;margin-top:4px"></div></div>
+    <button onclick="depGoMonth('${depMonthAdd(M, 1)}')">翌月 ▶</button></div></div>
+  <div class="card"><div class="mute" style="margin-bottom:6px">${imp}</div>
+    <label class="fb">📥 スマイルの入金実績CSVを取り込む<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="depImport(this)"></label>
+    <div class="mute" style="margin-top:6px">スマイルワークスの「入金実績一覧表」をCSVで出力したものです。月の途中までのCSVでも、同じ期間をもう一度取り込めば置き換わります（入力済みの金額は消えません）。</div></div>
+  <div id="dsum">${depSumHtml()}</div>
+  ${hasSmile ? '' : `<div class="card" style="border-left:4px solid #f79009"><b>${Y}年${MO}月のスマイルの入金実績がありません。</b><div class="mute">CSVを取り込むと、日ごとに自動で照合します。</div></div>`}
+  <div class="row" style="margin:8px 0;align-items:center"><label style="margin:0"><input type="checkbox" style="width:auto" ${DEP.only ? 'checked' : ''} onchange="DEP.only=this.checked;depRows()"> 差異・未入力の日だけ表示</label></div>
+  <div class="dwrap" style="overflow:auto;max-height:78vh;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.12)">
+  <table class="dt"><thead><tr><th class="sk">日</th><th>スマイル<div class="mute" style="font-weight:400">現金・振込</div></th><th>差額・状態</th>${ks.map(k => `<th>${esc(k.n)}</th>`).join('')}<th>入力計</th></tr></thead>
+  <tbody id="dbody">${depRowsHtml()}</tbody></table></div>
+  <div class="mute" style="margin:8px 0">金額の欄には、式も入れられます（例: <code>5000+3840</code>）。Enterで下の日に進みます。「差異」の日は、「明細」ボタンで、その日のスマイルの入金を見られます。</div>
+  ${admin ? depAcctEditor() : ''}`;
+}
+function depSumHtml(){
+  let S = {cash: 0, bank: 0, fee: 0}, E = 0, cnt = {match: 0, split: 0, todo: 0, diff: 0, ok: 0};
+  const days = new Date(Number(DEP.m.slice(0, 4)), Number(DEP.m.slice(5)), 0).getDate();
+  for (let d = 1; d <= days; d++) {
+    const r = depCalc(d); S.cash += r.s.cash; S.bank += r.s.bank; S.fee += r.s.fee; E += r.E;
+    if (r.ok && r.st !== 'match') cnt.ok++; else if (cnt[r.st] != null) cnt[r.st]++;
+  }
+  const St = S.cash + S.bank + S.fee, df = E - St;
+  const chip = (t, n, c) => n ? `<span class="badge" style="background:${c[0]};color:${c[1]}">${t} ${n}日</span> ` : '';
+  return `<div class="card"><div class="row" style="gap:16px;flex-wrap:wrap">
+    <div><div class="mute">スマイル 月計</div><b style="font-size:18px">${yen(St)}</b><div class="mute">現金 ${yen(S.cash)} / 振込 ${yen(S.bank)} / 手数料 ${yen(S.fee)}</div></div>
+    <div><div class="mute">入力 月計</div><b style="font-size:18px">${yen(E)}</b></div>
+    <div><div class="mute">差額</div><b style="font-size:18px;color:${df ? '#b42318' : '#067647'}">${df > 0 ? '+' : ''}${yen(df)}</b></div></div>
+    <div style="margin-top:8px">${chip('✓ 一致', cnt.match + cnt.split, ['#dcfae6', '#067647'])}${chip('差異', cnt.diff, ['#fee4e2', '#b42318'])}${chip('未入力', cnt.todo, ['#fef0c7', '#b54708'])}${chip('確認済み', cnt.ok, ['#d1e9ff', '#175cd3'])}${cnt.diff + cnt.todo ? '' : (S.cash + S.bank + S.fee ? '<span class="badge" style="background:#dcfae6;color:#067647">すべて照合できています</span>' : '')}</div></div>`;
+}
+const WD = ['日', '月', '火', '水', '木', '金', '土'];
+function depRowsHtml(){
+  const [Y, MO] = DEP.m.split('-').map(Number), days = new Date(Y, MO, 0).getDate(), ks = depKeys();
+  let h = '';
+  for (let d = 1; d <= days; d++) {
+    const r = depCalc(d);
+    if (DEP.only && !depBad(r)) continue;
+    const wd = new Date(Y, MO - 1, d).getDay();
+    const dc = wd === 0 ? '#b42318' : wd === 6 ? '#175cd3' : '#1f2937';
+    const s = r.s;
+    h += `<tr id="dr_${d}" class="${depRowCls(r)}"><td class="sk" style="color:${dc};white-space:nowrap"><b>${d}</b> ${WD[wd]}</td>
+      <td class="n" style="white-space:nowrap">${s.n ? `<b>${yen(r.S)}</b><div class="mute" style="font-size:11px">現${yen(s.cash)}・振${yen(s.bank)}${s.fee ? '・手' + yen(s.fee) : ''}${s.off ? '<br>相殺等 ' + yen(s.off) : ''}</div>` : '<span class="mute">—</span>'}</td>
+      <td id="ds_${d}" style="white-space:nowrap">${depStatusHtml(r)} ${s.n || r.any ? `<button class="sm" onclick="depOpen(${d})">${DEP.sel === d ? '閉じる' : '明細'}</button>` : ''}${r.note ? ' <span title="' + esc(r.note) + '">📝</span>' : ''}</td>
+      ${ks.map(k => { const c = (DEP.cm[d] || {})[k.k]; return `<td class="ci"><input class="dc" id="c_${d}_${k.k}" inputmode="text" autocomplete="off" value="${c ? yen(c.amount) : ''}" title="${c && c.expr ? esc('=' + c.expr) : ''}" onfocus="depFocus(this,${d},'${k.k}')" onblur="depBlur(this,${d},'${k.k}')" onkeydown="depKey(event,this,${d},'${k.k}')"></td>`; }).join('')}
+      <td class="n" id="dt_${d}">${r.any ? yen(r.E) : ''}</td></tr>`;
+    if (DEP.sel === d) h += `<tr class="det"><td colspan="${ks.length + 4}" id="dd_${d}">${depDetailHtml(d)}</td></tr>`;
+  }
+  return h || `<tr><td colspan="${ks.length + 4}" class="mute" style="text-align:center;padding:16px">差異・未入力の日はありません</td></tr>`;
+}
+function depRowCls(r){ return r.ok && r.st !== 'match' ? 'ok' : r.st === 'diff' ? 'bad' : r.st === 'todo' ? 'todo' : ''; }
+function depRows(){ const e = $('#dbody'); if (e) e.innerHTML = depRowsHtml(); }
+function depRefresh(d){ // 1日分の計算結果だけ更新(入力中の欄はそのまま)
+  const r = depCalc(d), tr = $('#dr_' + d); if (!tr) return;
+  tr.className = depRowCls(r);
+  $('#dt_' + d).textContent = r.any ? yen(r.E) : '';
+  const s = $('#ds_' + d);
+  s.innerHTML = depStatusHtml(r) + ' ' + (r.s.n || r.any ? `<button class="sm" onclick="depOpen(${d})">${DEP.sel === d ? '閉じる' : '明細'}</button>` : '') + (r.note ? ' <span title="' + esc(r.note) + '">📝</span>' : '');
+  const sm = $('#dsum'); if (sm) sm.innerHTML = depSumHtml();
+}
+function depFocus(el, d, k){ if (!DEP.cm) return; const c = (DEP.cm[d] || {})[k]; el.value = c ? (c.expr || String(c.amount)) : ''; el.select(); }
+async function depBlur(el, d, k){
+  if (!DEP.cm || !el.isConnected) return;
+  const c = (DEP.cm[d] || {})[k], cur = c ? (c.expr || String(c.amount)) : '', raw = depNorm(el.value);
+  if (raw === cur) { el.value = c ? yen(c.amount) : ''; return; }
+  const M0 = DEP.m, ymd = DEP.m + '-' + String(d).padStart(2, '0');
+  try {
+    const r = await run('depSet', ymd, k, raw);
+    if (DEP.m !== M0 || !DEP.cm) return; // 保存中に月を移った
+    DEP.cm[d] = DEP.cm[d] || {};
+    if (r.amount === null) delete DEP.cm[d][k]; else DEP.cm[d][k] = {amount: r.amount, expr: r.expr};
+    if (document.activeElement !== el) el.value = r.amount === null ? '' : yen(r.amount);
+    el.title = r.expr ? '=' + r.expr : '';
+  } catch (e) { el.value = c ? yen(c.amount) : ''; }
+  if (DEP.m === M0 && DEP.cm) depRefresh(d);
+}
+function depKey(ev, el, d, k){
+  if (ev.isComposing) return;
+  if (ev.key === 'Enter' || ev.key === 'ArrowDown') { ev.preventDefault(); const n = $('#c_' + (d + 1) + '_' + k); if (n) n.focus(); else el.blur(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); const n = $('#c_' + (d - 1) + '_' + k); if (n) n.focus(); }
+}
+async function depOpen(d){
+  DEP.sel = DEP.sel === d ? null : d; DEP.detail = null; depRows();
+  if (DEP.sel !== d) return;
+  const ymd = DEP.m + '-' + String(d).padStart(2, '0');
+  try { DEP.detail = {d: d, rows: await run('depDay', ymd)}; } catch (e) { return; }
+  const e = $('#dd_' + d); if (e && DEP.sel === d) e.innerHTML = depDetailHtml(d);
+}
+function depDetailHtml(d){
+  const r = depCalc(d), nt = DEP.nt[d] || {}, det = DEP.detail && DEP.detail.d === d ? DEP.detail.rows : null;
+  const ymd = DEP.m + '-' + String(d).padStart(2, '0');
+  const lst = det === null ? '<div class="mute">読み込み中...</div>' : !det.length ? '<div class="mute">この日のスマイルの入金はありません</div>' :
+    `<div style="max-height:320px;overflow:auto"><table style="width:100%;font-size:13px"><tr><th>得意先</th><th>入金額</th><th>現金</th><th>振込</th><th>手数料</th><th>相殺等</th><th>伝票</th></tr>${det.map(x => `<tr><td>${esc(x.name)}</td><td class="n">${yen(x.amount)}</td><td class="n">${x.cash ? yen(x.cash) : ''}</td><td class="n">${x.bank ? yen(x.bank) : ''}</td><td class="n">${x.fee ? yen(x.fee) : ''}</td><td class="n">${x.off ? yen(x.off) : ''}</td><td class="mute">${esc(x.slip)}</td></tr>`).join('')}</table></div>`;
+  return `<div style="padding:8px 4px"><b>${DEP.m.slice(5).replace(/^0/, '')}月${d}日のスマイルの入金（${det ? det.length : (r.s.n)}件）</b>
+    <div class="mute" style="margin:2px 0 6px">スマイル計 ${yen(r.S)}（現金 ${yen(r.s.cash)} + 振込 ${yen(r.s.bank)} + 手数料 ${yen(r.s.fee)}）／ 入力計 ${yen(r.E)}${r.s.off ? '／ 相殺など ' + yen(r.s.off) + '（お金が動かないので、照合には入れていません）' : ''}</div>
+    ${lst}
+    <div class="row" style="margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap"><input id="nt_${d}" value="${esc(nt.note || '')}" placeholder="メモ（差額の理由など）" style="flex:1;min-width:200px">
+      <label style="margin:0;white-space:nowrap"><input type="checkbox" id="ok_${d}" style="width:auto" ${nt.ok ? 'checked' : ''}> 確認済み（差額があっても了承）</label>
+      <button class="pri" onclick="depNoteSave(${d})">保存</button></div>
+    ${nt.at ? `<div class="mute" style="margin-top:4px">${esc(nt.at)} ${esc(nt.by || '')}</div>` : ''}</div>`;
+}
+async function depNoteSave(d){
+  const note = $('#nt_' + d).value.trim(), ok = $('#ok_' + d).checked, ymd = DEP.m + '-' + String(d).padStart(2, '0');
+  await run('depNote', ymd, note, ok);
+  if (!note && !ok) delete DEP.nt[d]; else DEP.nt[d] = {ymd: ymd, note: note, ok: ok ? 1 : 0, by: (DB.me && DB.me.name) || '', at: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16).replace('T', ' ')};
+  depRefresh(d); DEP.sel = null; depRows();
+}
+// --- 口座の一覧(管理者) ---
+function depAcctEditor(){
+  return `<details class="card" style="margin-top:10px"><summary>⚙ 口座の追加・名前の変更（管理者）</summary>
+    <div class="mute" style="margin:6px 0">入力した金額がある口座は、削除できません。名前だけの変更はできます。</div>
+    <div id="dacc">${DEP.data.accts.map(a => depAcctRow(a.id, a.name)).join('')}</div>
+    <div class="row" style="margin-top:8px"><button onclick="depAcctAdd()">＋ 口座を追加</button><button class="pri" onclick="depAcctSave()">この内容で保存</button></div></details>`;
+}
+const depAcctRow = (id, name) => `<div class="row" style="margin:4px 0" data-id="${esc(id)}"><input value="${esc(name)}" maxlength="20" style="flex:1"><button class="dng" onclick="this.parentNode.remove()">削除</button></div>`;
+function depAcctAdd(){ $('#dacc').insertAdjacentHTML('beforeend', depAcctRow('', '')); }
+async function depAcctSave(){
+  const list = [...document.querySelectorAll('#dacc > div')].map(e => ({id: e.dataset.id, name: e.querySelector('input').value}));
+  await run('depAccounts', list);
+  DEP.data = null; render();
+}
+// --- スマイルの入金実績CSVの取込 ---
+async function depImport(inp){
+  const file = inp.files[0]; inp.value = ''; if (!file) return;
+  const buf = await file.arrayBuffer();
+  let text; try { text = new TextDecoder('utf-8', {fatal: true}).decode(buf); } catch (e) { text = new TextDecoder('shift_jis').decode(buf); }
+  const rows = parseCsv(text.replace(/^﻿/, ''));
+  const hi = rows.findIndex(r => r.indexOf('伝票番号') >= 0 && r.indexOf('入金日') >= 0);
+  if (hi < 0) return alert('入金実績一覧表のCSVではないようです（「伝票番号」「入金日」の列が見つかりません）');
+  const H = rows[hi].map(x => String(x).trim()), ix = n => H.indexOf(n);
+  for (const n of ['入金額', '現金', '振込']) if (ix(n) < 0) return alert('「' + n + '」の列が見つかりません');
+  const num = (r, n) => { const i = ix(n); if (i < 0) return 0; const v = Number(String(r[i] || '').replace(/[,\s]/g, '')); return Number.isFinite(v) ? v : 0; };
+  const out = []; let bad = 0;
+  for (const r of rows.slice(hi + 1)) {
+    const m = /^(\d{2,4})\/(\d{1,2})\/(\d{1,2})$/.exec(String(r[ix('入金日')] || '').trim());
+    if (!m) continue; // 小計・合計の行など
+    const y = Number(m[1]) < 100 ? Number(m[1]) + 2018 : Number(m[1]);
+    const ymd = y + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+    const amount = num(r, '入金額'), cash = num(r, '現金'), bank = num(r, '振込') + num(r, '手形') + num(r, '口振') + num(r, 'カード') + num(r, '預け金'), fee = num(r, 'その他'), off = num(r, '相殺') + num(r, '貸倒');
+    if (amount !== cash + bank + fee + off) bad++;
+    out.push([ymd, r[ix('伝票番号')], r[ix('得意先コード')], r[ix('得意先名')], amount, cash, bank, fee, off]);
+  }
+  if (!out.length) return alert('取り込めるデータがありませんでした');
+  const ds = out.map(x => x[0]).sort(), from = ds[0], to = ds[ds.length - 1];
+  if (!confirm(from.replace(/-/g, '/') + ' 〜 ' + to.replace(/-/g, '/') + ' の ' + yen(out.length) + '件を取り込みます。\nこの期間にすでに取り込んだデータは置き換えます（入力済みの金額は消えません）。\n' + (bad ? '※ 内訳が合わない行が ' + bad + '件あります。\n' : '') + 'よろしいですか？')) return;
+  busy(1);
+  try {
+    await run('depImportBegin', from, to);
+    for (let i = 0; i < out.length; i += 400) {
+      $('#busy').textContent = '取込中 ' + Math.min(i + 400, out.length) + ' / ' + out.length;
+      await run('depImportAdd', out.slice(i, i + 400));
+    }
+  } finally { busy(-1); $('#busy').textContent = '処理中...'; }
+  DEP = {meta: null, m: to.slice(0, 7), data: null, sel: null, detail: null, only: false};
+  alert('取り込みました（' + yen(out.length) + '件）');
+  go('deposit');
+}
 
 // ---------- スマイルワークス得意先CSVの取込 ----------
 function parseCsv(text){

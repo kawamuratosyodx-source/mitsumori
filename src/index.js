@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.7.0  (2026-10-04)
+// 業務管理 河村図書教材社  v2.8.0  (2026-10-05)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -508,6 +508,101 @@ const API = {
     return { months: months, need: [], skipped: skipped };
   },
 
+  // ===== 入金照合(スマイルワークスの入金実績CSV と 実際の入金の突き合わせ) =====
+  async depMonths(env) {
+    await ensureDep(env);
+    const r = await env.DB.prepare('SELECT substr(ymd,1,7) AS m, COUNT(*) AS n FROM dep_rows GROUP BY m ORDER BY m').all();
+    const c = await env.DB.prepare('SELECT substr(ymd,1,7) AS m FROM dep_cells GROUP BY m').all();
+    const mm = await env.DB.prepare('SELECT MIN(ymd) AS a, MAX(ymd) AS b, COUNT(*) AS n FROM dep_rows').first();
+    return { months: r.results || [], entered: (c.results || []).map(x => x.m), from: mm && mm.a || '', to: mm && mm.b || '', n: mm ? mm.n : 0, accts: await depAccts(env) };
+  },
+  async depMonth(env, ctx, m) {
+    await ensureDep(env);
+    m = String(m || '');
+    if (!/^\d{4}-\d{2}$/.test(m)) throw fail('月が正しくありません');
+    const lo = m + '-01', hi = m + '-32';
+    const s = await env.DB.prepare('SELECT ymd, COUNT(*) AS n, SUM(amount) AS amount, SUM(cash) AS cash, SUM(bank) AS bank, SUM(fee) AS fee, SUM(off) AS off FROM dep_rows WHERE ymd >= ? AND ymd < ? GROUP BY ymd').bind(lo, hi).all();
+    const c = await env.DB.prepare('SELECT ymd, k, amount, expr FROM dep_cells WHERE ymd >= ? AND ymd < ?').bind(lo, hi).all();
+    const n = await env.DB.prepare('SELECT ymd, note, ok, by, at FROM dep_notes WHERE ymd >= ? AND ymd < ?').bind(lo, hi).all();
+    return { m: m, smile: s.results || [], cells: c.results || [], notes: n.results || [], accts: await depAccts(env) };
+  },
+  async depDay(env, ctx, ymd) {
+    await ensureDep(env);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) throw fail('日付が正しくありません');
+    const r = await env.DB.prepare('SELECT slip, code, name, amount, cash, bank, fee, off FROM dep_rows WHERE ymd = ? ORDER BY id').bind(String(ymd)).all();
+    return r.results || [];
+  },
+  // 1マスの入力。式(例 5000+3840)も受け付ける。空にするとそのマスを消す
+  async depSet(env, ctx, ymd, k, expr) {
+    await ensureDep(env);
+    ymd = String(ymd); k = String(k);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw fail('日付が正しくありません');
+    const ok = k === 'cash' || k === 'fee' || (await depAccts(env)).some(a => a.id === k);
+    if (!ok) throw fail('入力先が正しくありません');
+    expr = String(expr == null ? '' : expr).normalize('NFKC').replace(/[,，\s]/g, '').replace(/^=/, '');
+    if (expr === '') { await env.DB.prepare('DELETE FROM dep_cells WHERE ymd = ? AND k = ?').bind(ymd, k).run(); return { amount: null, expr: '' }; }
+    const v = evalSum(expr);
+    if (v === null) throw fail('金額は数字と + - ( ) だけで入力してください（例: 5000+3840）');
+    if (Math.abs(v) > 1e11) throw fail('金額が大きすぎます');
+    const isExpr = !/^-?\d+$/.test(expr);
+    await env.DB.prepare('INSERT INTO dep_cells (ymd,k,amount,expr) VALUES (?,?,?,?) ON CONFLICT(ymd,k) DO UPDATE SET amount = excluded.amount, expr = excluded.expr').bind(ymd, k, v, isExpr ? expr.slice(0, 100) : '').run();
+    return { amount: v, expr: isExpr ? expr : '' };
+  },
+  // 日ごとのメモと「確認済み」(差額があっても了承した印)
+  async depNote(env, ctx, ymd, note, ok) {
+    await ensureDep(env);
+    ymd = String(ymd);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw fail('日付が正しくありません');
+    note = String(note || '').slice(0, 300);
+    if (!note && !ok) { await env.DB.prepare('DELETE FROM dep_notes WHERE ymd = ?').bind(ymd).run(); return true; }
+    await env.DB.prepare('INSERT INTO dep_notes (ymd,note,ok,by,at) VALUES (?,?,?,?,?) ON CONFLICT(ymd) DO UPDATE SET note = excluded.note, ok = excluded.ok, by = excluded.by, at = excluded.at').bind(ymd, note, ok ? 1 : 0, ctx.email || '', nowStr()).run();
+    return true;
+  },
+  // 入金実績CSVの取込。from〜to の期間の既存分を消してから入れ直す(同じ期間を何度取り込んでも二重にならない)
+  async depImportBegin(env, ctx, from, to) {
+    await ensureDep(env);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(from)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to))) throw fail('期間が正しくありません');
+    await env.DB.prepare('DELETE FROM dep_rows WHERE ymd >= ? AND ymd <= ?').bind(String(from), String(to)).run();
+    return true;
+  },
+  // rows: [ymd, 伝票番号, 得意先コード, 得意先名, 入金額, 現金, 振込など(銀行へ入るもの), 手数料, 相殺など(お金が動かないもの)]
+  async depImportAdd(env, ctx, rows) {
+    await ensureDep(env);
+    if (!Array.isArray(rows) || rows.length > 500) throw fail('一度に送れる行数を超えています');
+    const I = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
+    const stmts = [];
+    for (const r of rows) {
+      if (!Array.isArray(r) || !/^\d{4}-\d{2}-\d{2}$/.test(String(r[0]))) continue;
+      stmts.push(env.DB.prepare('INSERT INTO dep_rows (ymd,slip,code,name,amount,cash,bank,fee,off) VALUES (?,?,?,?,?,?,?,?,?)')
+        .bind(String(r[0]), String(r[1] || '').slice(0, 30), String(r[2] || '').slice(0, 30), String(r[3] || '').slice(0, 100), I(r[4]), I(r[5]), I(r[6]), I(r[7]), I(r[8])));
+    }
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return stmts.length;
+  },
+  // 口座の一覧(管理者のみ変更)。list: [{id?, name}]  idのあるものは名前の変更、ないものは追加。消せるのは入力が無い口座だけ
+  async depAccounts(env, ctx, list) {
+    if (!ctx.admin) throw fail('口座の変更は管理者だけができます');
+    await ensureDep(env);
+    if (!Array.isArray(list) || !list.length || list.length > 20) throw fail('口座は1〜20個にしてください');
+    const old = await depAccts(env), out = [];
+    const names = new Set();
+    for (const a of list) {
+      const name = String((a && a.name) || '').trim().slice(0, 20);
+      if (!name) continue;
+      if (names.has(name)) throw fail('同じ名前の口座があります: ' + name);
+      names.add(name);
+      let id = a.id && old.some(o => o.id === a.id) ? a.id : 'a' + newId().slice(0, 6);
+      out.push({ id: id, name: name });
+    }
+    if (!out.length) throw fail('口座の名前を入力してください');
+    for (const o of old) if (!out.some(x => x.id === o.id)) {
+      const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM dep_cells WHERE k = ?').bind(o.id).first();
+      if (c.n) throw fail('「' + o.name + '」には入力済みの金額があるため、削除できません');
+    }
+    await env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('depaccts', JSON.stringify(out)).run();
+    return out;
+  },
+
   // 手書きメモの文字起こし(Gemini)
   async ocrImage(env, ctx, dataUrl) {
     const m = /^data:(image\/.+?);base64,(.*)$/s.exec(dataUrl || '');
@@ -547,6 +642,39 @@ async function bundle(env, quoteId) {
   return { q: q, lines: lines, p: p, c: c };
 }
 
+
+// ===== 入金照合のしたく =====
+const DEP_DEFAULT = ['UFJ', 'JA', '蒲信', '蒲信当座', '豊信東', '豊信小坂井', '豊信吉田方', '川信', '商工', 'ゆうちょ'];
+let depReady = false;
+async function ensureDep(env) {
+  if (depReady) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS "settings" ("key" TEXT PRIMARY KEY, "value" TEXT)').run();
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS dep_rows (id INTEGER PRIMARY KEY AUTOINCREMENT, ymd TEXT, slip TEXT, code TEXT, name TEXT, amount INTEGER, cash INTEGER, bank INTEGER, fee INTEGER, off INTEGER)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS dep_rows_ymd ON dep_rows (ymd)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS dep_cells (ymd TEXT, k TEXT, amount INTEGER, expr TEXT, PRIMARY KEY (ymd, k))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS dep_notes (ymd TEXT PRIMARY KEY, note TEXT, ok INTEGER, by TEXT, at TEXT)'),
+  ]);
+  depReady = true;
+}
+async function depAccts(env) {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'depaccts'").first();
+  if (r) { try { const a = JSON.parse(r.value); if (Array.isArray(a) && a.length) return a; } catch (e) {} }
+  return DEP_DEFAULT.map((n, i) => ({ id: 'a' + (i + 1), name: n }));
+}
+// 足し算・引き算・かっこだけの式を計算する(それ以外は null)。例: "-3690+414147"
+function evalSum(src) {
+  if (!/^[0-9+\-()]+$/.test(src) || src.length > 100) return null;
+  let i = 0;
+  const num = () => {
+    if (src[i] === '(') { i++; const v = expr(); if (src[i] !== ')') throw 0; i++; return v; }
+    if (src[i] === '-') { i++; return -num(); }
+    if (src[i] === '+') { i++; return num(); }
+    const m = /^\d+/.exec(src.slice(i)); if (!m) throw 0; i += m[0].length; return Number(m[0]);
+  };
+  const expr = () => { let v = num(); while (src[i] === '+' || src[i] === '-') { const o = src[i++]; const w = num(); v = o === '+' ? v + w : v - w; } return v; };
+  try { const v = expr(); return i === src.length && Number.isFinite(v) ? v : null; } catch (e) { return null; }
+}
 
 // ===== 操作ログ・ログインログ =====
 let logReady = false;
@@ -592,6 +720,10 @@ async function describeOp(env, fn, args, before) {
     case 'salesDelete': return ['削除', '売上データ ' + (before || '')];
     case 'salesSearch': { const o = args[3] || {}; return args[2] ? null : ['検索', '売上データ「' + String(args[1] || '') + '」' + (o.from || o.to ? ' ' + (o.from || '') + '〜' + (o.to || '') : '')]; }
     case 'salesTax': return ['閲覧', '売上データの税率別集計'];
+    case 'depImportBegin': return ['取込', '入金実績 ' + String(args[0] || '') + '〜' + String(args[1] || '')];
+    case 'depSet': return ['入力', '入金照合 ' + String(args[0] || '') + ' ' + String(args[1] || '') + ' ' + String(args[2] || '')];
+    case 'depNote': return ['更新', '入金照合のメモ ' + String(args[0] || '') + (args[2] ? '（確認済み）' : '')];
+    case 'depAccounts': return ['変更', '入金照合の口座一覧'];
     case 'ocrImage': return ['利用', '手書きの文字起こし'];
     default: return null;
   }
