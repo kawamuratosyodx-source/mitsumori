@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.3  (2026-10-05)
+// 業務管理 河村図書教材社  v2.10.4  (2026-10-06)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -519,9 +519,15 @@ async function submitForm(){
     if (!o.customerId) return alert('顧客を選ぶか、新しい顧客名を入力してください');
   }
   if (c.required && !o[c.required]) return alert('必須項目が未入力です');
-  const saved = await run('save', c.table, o);
-  await reload0();
-  if (c.after) c.after(saved); else history_back();
+  if (c.saving) return;           // 連打・二重送信を防ぐ
+  c.saving = true;
+  try {
+    const saved = await run('save', c.table, o);
+    // 保存できたあとに読み直しで失敗しても、次の「保存」は同じものの更新になる(新しく増やさない)
+    c.vals = Object.assign({}, c.vals, {id: saved.id, created: saved.created});
+    await reload0();
+    if (c.after) c.after(saved); else history_back();
+  } finally { c.saving = false; }
 }
 async function delForm(){
   if (!confirm('削除しますか？')) return;
