@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.8  (2026-10-07)
+// 業務管理 河村図書教材社  v2.10.9  (2026-10-07)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1042,7 +1042,7 @@ function memoListHtml(){
     <div class="mute">${esc(c.name || '')} ${esc(m.who)}</div>
     <div class="mute">${esc(stampHtml(m))}</div>
     ${lines.length > 1 ? `<div style="white-space:pre-wrap;margin-top:4px;max-height:4.5em;overflow:hidden">${esc(lines.slice(1).join('\n'))}</div>` : ''}
-    ${m.status !== '完了' ? `<div class="row" style="margin-top:6px" onclick="event.stopPropagation()"><button onclick="markMemo('${m.id}','完了')">完了にする</button></div>` : ''}</div>`;
+    <div class="row" style="margin-top:6px" onclick="event.stopPropagation()">${m.status !== '完了' ? `<button onclick="markMemo('${m.id}','完了')">完了にする</button>` : ''}<button onclick="memoPrint('${m.id}')">🖨 印刷</button></div></div>`;
   }).join('') || '<p class="mute">メモはありません</p>';
 }
 async function markMemo(id, status){
@@ -1058,6 +1058,32 @@ async function ocrMemo(inp){
   if (!r.text) return alert('文字を読み取れませんでした。明るい場所で、ノートを真上から大きく撮影してみてください。');
   const ta = $('#f_body'); ta.value = ta.value ? ta.value + '\n' + r.text : r.text;
 }
+// ===== メモの印刷(A4縦・1件ずつ) =====
+function memoPrintHtml(m){
+  const c = cust(m.customerId), co = (DB.company && DB.company.name) || '';
+  const lines = String(m.body || '').split('\n');
+  const title = lines[0].trim() || '(無題)', rest = lines.slice(1).join('\n').replace(/^\n+/, '');
+  const pj = m.projectId ? (DB.projects.find(x => x.id === m.projectId) || {}).name : '';
+  const now = new Date(), stamp = now.getFullYear() + '/' + (now.getMonth() + 1) + '/' + now.getDate();
+  const row = (k, v) => v ? `<tr><th>${k}</th><td>${esc(v)}</td></tr>` : '';
+  const css = `@page{size:A4 portrait;margin:15mm}*{box-sizing:border-box}body{font-family:"Hiragino Sans","Yu Gothic","Meiryo",sans-serif;color:#111;margin:0;font-size:11pt;line-height:1.6}
+    .co{font-size:9pt;color:#555;display:flex;justify-content:space-between}h1{font-size:16pt;margin:6px 0 10px;padding-bottom:6px;border-bottom:2px solid #333}
+    table{border-collapse:collapse;width:100%;margin-bottom:12px}th,td{border:.5pt solid #777;padding:4px 8px;text-align:left;font-size:10pt}th{background:#eee;width:22%;font-weight:600}
+    .body{white-space:pre-wrap;word-break:break-word;border:.5pt solid #777;padding:10px 12px;min-height:120mm;font-size:11.5pt}.foot{margin-top:8px;font-size:8.5pt;color:#555}`;
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>メモ ${esc(title)}</title><style>${css}</style></head><body>
+    <div class="co"><span>${esc(co)}</span><span>メモ</span></div><h1>${esc(title)}</h1>
+    <table>${row('種別', m.kind)}${row('対応状況', m.status)}${row('顧客', c.name ? c.name + (c.code ? '（' + c.code + '）' : '') : '')}${row('相手先・担当者', m.who)}${row('関連する案件', pj)}${row('作成・更新', stampHtml(m))}</table>
+    <div class="body">${rest ? esc(rest) : '<span style="color:#999">（本文なし）</span>'}</div>
+    <div class="foot">出力日 ${stamp}</div></body></html>`;
+}
+function memoPrint(id){ const m = DB.memos.find(x => x.id === id); if (m) viewDoc({html: memoPrintHtml(m)}); }
+function memoPrintForm(){ // 編集中の内容(まだ保存していなくても)をそのまま印刷する
+  const c = view.cfg; if (!c) return;
+  const o = Object.assign({}, c.vals);
+  c.fields.forEach(f => { const e = $('#f_' + f.k); if (e) o[f.k] = e.value; });
+  if (!String(o.body || '').trim()) return alert('内容が空です');
+  viewDoc({html: memoPrintHtml(o)});
+}
 function editMemo(id){
   const vals = id ? Object.assign({}, DB.memos.find(m => m.id === id)) : {status: '未対応', kind: '問い合わせ'};
   openForm({title: id ? 'メモの編集' : 'メモの追加', table: 'memos', vals: vals, required: 'body',
@@ -1067,7 +1093,7 @@ function editMemo(id){
       {k:'kind',l:'種別',t:'select',o:['問い合わせ','注文','依頼','連絡事項','クレーム','その他'].map(x => [x, x])},
       {k:'status',l:'対応状況',t:'select',o:['未対応','対応中','完了'].map(x => [x, x])},
       {k:'body',l:'内容（1行目が見出しになります）',t:'textarea',rows:9}],
-    extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + `<div class="row" style="margin-top:10px"><label class="fb">✍ 手書きを撮影して文字起こし<input type="file" accept="image/*" capture="environment" style="display:none" onchange="ocrMemo(this)"></label><label class="fb">🖼 写真から文字起こし<input type="file" accept="image/*" style="display:none" onchange="ocrMemo(this)"></label></div><div class="mute" style="margin-top:4px">文字起こしは内容の欄の末尾に追加されます。手書きは誤読があるため、数字・電話番号・名前は必ず確認してください。</div>`,
+    extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + `<div class="row" style="margin-top:10px"><button onclick="memoPrintForm()">🖨 このメモを印刷</button></div>` + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + `<div class="row" style="margin-top:10px"><label class="fb">✍ 手書きを撮影して文字起こし<input type="file" accept="image/*" capture="environment" style="display:none" onchange="ocrMemo(this)"></label><label class="fb">🖼 写真から文字起こし<input type="file" accept="image/*" style="display:none" onchange="ocrMemo(this)"></label></div><div class="mute" style="margin-top:4px">文字起こしは内容の欄の末尾に追加されます。手書きは誤読があるため、数字・電話番号・名前は必ず確認してください。</div>`,
     onDelete: !!id, afterDelete: () => go('memos'), after: () => go('memos')});
 }
 
