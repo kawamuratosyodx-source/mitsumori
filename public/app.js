@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.9  (2026-10-07)
+// 業務管理 河村図書教材社  v2.10.10  (2026-10-07)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1014,10 +1014,20 @@ function editVendor(id){
 }
 
 // ---------- メモ帳 ----------
-V.memos = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button class="pri" onclick="editMemo()">＋メモ</button></div>
-  <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()">
-  <select style="width:auto" onchange="view.ms=this.value;$('#mlist').innerHTML=memoListHtml()">${['', '未対応', '対応中', '完了'].map(x => `<option value="${x}" ${(view.ms || '') === x ? 'selected' : ''}>${x || 'すべて'}</option>`).join('')}</select></div>
+// メモ一覧の絞り込み・並べ方(この端末で覚えておく)
+const MOPT = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('memoopt') || '{}') || {}; } catch (e) {} return {ms: o.ms || '', so: o.so || 'new'}; })();
+function memoOpt(k, v){ MOPT[k] = v; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mlist').innerHTML = memoListHtml(); }
+const memoOpen = m => m.status !== '完了';
+V.memos = () => {
+  const cnt = f => DB.memos.filter(f).length;
+  const fo = [['', 'すべて（' + DB.memos.length + '）'], ['open', '未完了（' + cnt(memoOpen) + '）'], ['完了', '完了（' + cnt(m => !memoOpen(m)) + '）'], ['未対応', '　未対応（' + cnt(m => m.status === '未対応') + '）'], ['対応中', '　対応中（' + cnt(m => m.status === '対応中') + '）']];
+  const so = [['new', '新しい順'], ['open', '未完了を先に'], ['done', '完了を先に']];
+  return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button class="pri" onclick="editMemo()">＋メモ</button></div>
+  <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()"></div>
+  <div class="bar"><select style="width:auto" onchange="memoOpt('ms',this.value)">${fo.map(o => `<option value="${o[0]}" ${MOPT.ms === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+  <select style="width:auto" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select></div>
   <div id="mlist">${memoListHtml()}</div>`;
+};
 function stampHtml(o){
   if (!o) return '';
   const c = String(o.created || '').slice(0, 16), u = String(o.updated || '').slice(0, 16);
@@ -1030,11 +1040,15 @@ function memoListHtml(){
   const words = (view.mq || '').toLowerCase().split(/\s+/).filter(Boolean);
   const stamp = m => String(m.updated || m.created || '');
   const list = DB.memos.filter(m => {
-    if (view.ms && m.status !== view.ms) return false;
+    if (MOPT.ms === 'open' ? !memoOpen(m) : MOPT.ms && m.status !== MOPT.ms) return false;
     const c = cust(m.customerId);
     const t = [m.body, m.who, m.kind, c.name, c.code].join(' ').toLowerCase();
     return words.every(w => t.includes(w));
-  }).sort((a, b) => stamp(b).localeCompare(stamp(a)));
+  }).sort((a, b) => {
+    const rk = m => m.status === '完了' ? 2 : m.status === '対応中' ? 1 : 0;   // 未対応 → 対応中 → 完了
+    const r = MOPT.so === 'open' ? rk(a) - rk(b) : MOPT.so === 'done' ? rk(b) - rk(a) : 0;
+    return r || stamp(b).localeCompare(stamp(a));
+  });
   const col = {'未対応': '#fde8e8', '対応中': '#fff4e0', '完了': '#e6f4ea'};
   return list.slice(0, 200).map(m => {
     const c = cust(m.customerId), lines = String(m.body || '').split('\n');
