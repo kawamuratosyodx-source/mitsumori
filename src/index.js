@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.5  (2026-10-07)
+// 業務管理 河村図書教材社  v2.10.6  (2026-10-07)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -810,7 +810,8 @@ const API = {
             generationConfig: { temperature: 0 },
           }),
         });
-        if (res.status === 404) { lastErr = model + ' 404: ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 120); continue; }
+        // 使えない(404)・混み合っている(503)・回数制限(429)・一時的な不具合(500)のときは、次のモデルを試す
+        if ([404, 429, 500, 503].includes(res.status)) { lastErr = model + ' ' + res.status + ': ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 120); continue; }
         if (!res.ok) throw new Error('Gemini ' + res.status + ' (' + model + '): ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 200));
         const j = await res.json();
         const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
@@ -819,7 +820,7 @@ const API = {
         return { text: '', engine: 'none', note: '文字起こしに失敗しました。しばらくしてからもう一度お試しください。\n(' + String(e.message || e).slice(0, 200) + ')' };
       }
     }
-    return { text: '', engine: 'none', note: '文字起こしに使えるモデルが見つかりませんでした。\n(' + lastErr + ')' };
+    return { text: '', engine: 'none', note: '文字起こしのAIが混み合っているか、使えません。少し時間をおいて、もう一度お試しください。\n(' + lastErr + ')' };
   },
 };
 
