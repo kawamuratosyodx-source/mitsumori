@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.4  (2026-10-06)
+// 業務管理 河村図書教材社  v2.10.5  (2026-10-07)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -797,23 +797,29 @@ const API = {
     const m = /^data:(image\/.+?);base64,(.*)$/s.exec(dataUrl || '');
     if (!m) throw fail('画像形式が不正です');
     if (!env.GEMINI_API_KEY) return { text: '', engine: 'none', note: '文字起こしの設定（GEMINI_API_KEY）がまだ行われていません。管理者に連絡してください。' };
-    const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
-    try {
-      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: GEMINI_PROMPT }, { inline_data: { mime_type: m[1], data: m[2] } }] }],
-          generationConfig: { temperature: 0 },
-        }),
-      });
-      if (!res.ok) throw new Error('Gemini ' + res.status + ': ' + (await res.text()).slice(0, 200));
-      const j = await res.json();
-      const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
-      return { text: parts.map(p => p.text || '').join('').trim(), engine: 'gemini' };
-    } catch (e) {
-      return { text: '', engine: 'none', note: '文字起こしに失敗しました。しばらくしてからもう一度お試しください。\n(' + String(e.message || e).slice(0, 160) + ')' };
+    // 古いモデルは、新しい利用者には使えなくなることがある。指定のモデルが使えない(404)ときは、次の候補を順に試す
+    const models = Array.from(new Set([env.GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
+    let lastErr = '';
+    for (const model of models) {
+      try {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: GEMINI_PROMPT }, { inline_data: { mime_type: m[1], data: m[2] } }] }],
+            generationConfig: { temperature: 0 },
+          }),
+        });
+        if (res.status === 404) { lastErr = model + ' 404: ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 120); continue; }
+        if (!res.ok) throw new Error('Gemini ' + res.status + ' (' + model + '): ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 200));
+        const j = await res.json();
+        const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
+        return { text: parts.map(p => p.text || '').join('').trim(), engine: 'gemini' };
+      } catch (e) {
+        return { text: '', engine: 'none', note: '文字起こしに失敗しました。しばらくしてからもう一度お試しください。\n(' + String(e.message || e).slice(0, 200) + ')' };
+      }
     }
+    return { text: '', engine: 'none', note: '文字起こしに使えるモデルが見つかりませんでした。\n(' + lastErr + ')' };
   },
 };
 

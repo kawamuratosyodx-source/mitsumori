@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.4  (2026-10-06)
+// 業務管理 河村図書教材社  v2.10.5  (2026-10-07)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
