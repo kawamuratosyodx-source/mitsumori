@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.6  (2026-10-07)
+// 業務管理 河村図書教材社  v2.10.8  (2026-10-07)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';

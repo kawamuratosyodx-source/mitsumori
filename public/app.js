@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.6  (2026-10-07)
+// 業務管理 河村図書教材社  v2.10.8  (2026-10-07)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -90,12 +90,24 @@ function hay(p){
 }
 function listHtml(){
   const words = (view.q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  const list = DB.projects.filter(p => { const h = hay(p); return words.every(w => h.includes(w)); })
-    .sort((a, b) => String(b.created).localeCompare(String(a.created)));
+  const st = p => p.status || '進行中';
+  const byNew = (a, b) => String(b.created).localeCompare(String(a.created));
+  const rank = p => { const i = PSTAT.indexOf(st(p)); return i < 0 ? 99 : i; };
+  const cmp = {
+    new: byNew,
+    old: (a, b) => -byNew(a, b),
+    stat: (a, b) => rank(a) - rank(b) || byNew(a, b),
+    cust: (a, b) => String(cust(a.customerId).name || '').localeCompare(String(cust(b.customerId).name || ''), 'ja') || byNew(a, b),
+    name: (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ja') || byNew(a, b),
+  }[HOME.so] || byNew;
+  const list = DB.projects.filter(p => (!HOME.ps || st(p) === HOME.ps) && (() => { const h = hay(p); return words.every(w => h.includes(w)); })()).sort(cmp);
+  // 状態別のときは、状態ごとに見出しを入れる
+  let lastSt = null;
   return list.map(p => {
+    const head = HOME.so === 'stat' && st(p) !== lastSt ? (lastSt = st(p), `<div class="mute" style="margin:12px 4px 4px"><b>${esc(st(p))}</b>（${list.filter(x => st(x) === st(p)).length}件）</div>`) : '';
     const nq = DB.quotes.filter(q => q.projectId === p.id).length;
     const nr = DB.requests.filter(r => r.projectId === p.id).length;
-    return `<div class="card click" onclick="go('project',{id:'${p.id}'})"><div class="row"><b class="sp">${esc(p.name)}</b><span class="badge">${esc(p.status || '進行中')}</span></div>
+    return head + `<div class="card click" onclick="go('project',{id:'${p.id}'})"><div class="row"><b class="sp">${esc(p.name)}</b><span class="badge">${esc(p.status || '進行中')}</span></div>
     <div class="mute">${esc(cust(p.customerId).name || '(顧客未設定)')}　見積 ${nq}件 / 仕入先 ${nr}件${(() => { const S = projSummary(p.id); return S && S.pf.n ? '　粗利 ¥' + yen(S.pf.profit) + '（' + pct(S.pf.profit, S.pf.rev) + '）' : ''; })()}</div></div>`;
   }).join('') || '<p class="mute">該当する案件がありません</p>';
 }
@@ -482,7 +494,14 @@ V.report = () => {
   <div class="mute" style="margin-top:8px">受注率 = 受注 ÷ (受注 + 失注)。見積書の編集画面で「結果」を受注/失注にすると集計されます。</div></div>
   <div class="card"><b>結果が未定の見積書（${open.length}件）</b>${open.slice().sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate))).slice(0, 30).map(q => { const p = proj(q.projectId); return `<div class="card click" style="margin:8px 0 0" onclick="go('project',{id:'${q.projectId}'})"><div class="row"><span class="sp">${esc(cust(p.customerId).name || '')} / ${esc(q.subject || p.name)}</span><b>¥${yen(q.total)}</b></div><div class="mute">${esc(q.no)}　発行 ${esc(q.issueDate)}</div></div>`; }).join('') || '<div class="mute">なし</div>'}</div>`;
 };
-V.home = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><button onclick="go('report')">📊 集計</button><input id="q" placeholder="案件を検索（顧客・見積・品名・仕入先）" value="${esc(view.q)}" oninput="search(this.value)"><button class="pri" onclick="editProject()">＋案件</button></div><div id="list">${listHtml()}</div>`;
+const PSTAT = ['進行中', '見積提出済', '受注', '失注', '完了'];
+// 案件一覧の並べ方・絞り込み(画面を開き直しても、この端末では覚えておく)
+const HOME = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('homeopt') || '{}') || {}; } catch (e) {} return {so: o.so || 'new', ps: o.ps || ''}; })();
+function homeOpt(k, v){ HOME[k] = v; try { localStorage.setItem('homeopt', JSON.stringify(HOME)); } catch (e) {} $('#list').innerHTML = listHtml(); }
+V.home = () => `<div class="bar"><button onclick="go('menu')">← メニュー</button><button onclick="go('report')">📊 集計</button><input id="q" placeholder="案件を検索（顧客・見積・品名・仕入先）" value="${esc(view.q)}" oninput="search(this.value)"><button class="pri" onclick="editProject()">＋案件</button></div>
+<div class="bar"><select style="width:auto" onchange="homeOpt('ps',this.value)">${[''].concat(PSTAT).map(x => `<option value="${x}" ${HOME.ps === x ? 'selected' : ''}>${x ? '状態: ' + x + '（' + DB.projects.filter(p => (p.status || '進行中') === x).length + '）' : '状態: すべて（' + DB.projects.length + '）'}</option>`).join('')}</select>
+<select style="width:auto" onchange="homeOpt('so',this.value)">${[['new', '並べ方: 新しい順'], ['old', '並べ方: 古い順'], ['stat', '並べ方: 状態別'], ['cust', '並べ方: 顧客名'], ['name', '並べ方: 案件名']].map(o => `<option value="${o[0]}" ${HOME.so === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>
+<div id="list">${listHtml()}</div>`;
 
 // ---------- 汎用フォーム ----------
 function fld(f, v){
@@ -612,6 +631,7 @@ function depHtml(){
     <button onclick="depGoMonth('${depMonthAdd(M, -1)}')">◀ 前月</button>
     <div class="sp" style="text-align:center"><b style="font-size:18px">${Y}年${MO}月</b><span class="mute"> ${wareki}${MO}月分</span><div><input type="month" value="${M}" onchange="depGoMonth(this.value)" style="width:auto;margin-top:4px"></div></div>
     <button onclick="depGoMonth('${depMonthAdd(M, 1)}')">翌月 ▶</button></div></div>
+  <div class="row" style="margin:0 0 8px"><span class="sp"></span><button onclick="depPrint()">🖨 この月をA4で印刷</button></div>
   <div class="card"><div class="mute" style="margin-bottom:6px">${imp}</div>
     <label class="fb">📥 スマイルの入金実績CSVを取り込む<input type="file" accept=".csv,.txt,text/csv" style="display:none" onchange="depImport(this)"></label>
     <div class="mute" style="margin-top:6px">スマイルワークスの「入金実績一覧表」をCSVで出力したものです。月の途中までのCSVでも、同じ期間をもう一度取り込めば置き換わります（入力済みの金額は消えません）。</div>
@@ -625,6 +645,55 @@ function depHtml(){
   <tbody id="dbody">${depRowsHtml()}</tbody></table></div>
   <div class="mute" style="margin:8px 0">金額の欄には、式も入れられます（例: <code>5000+3840</code>）。Enterで下の日に進みます。「差異」の日は、「明細」ボタンで、その日のスマイルの入金を見られます。</div>
   ${admin ? depAcctEditor() : ''}`;
+}
+// ===== 入金照合表のA4印刷(横向き・1か月分を1枚に) =====
+function depPrintHtml(){
+  const [Y, MO] = DEP.m.split('-').map(Number), days = new Date(Y, MO, 0).getDate(), ks = depKeys();
+  const co = (DB.company && DB.company.name) || '';
+  const wareki = Y >= 2019 ? '令和' + (Y - 2018) + '年' + MO + '月分' : '';
+  const n = v => (v || v === 0) && v !== '' ? yen(v) : '';
+  const z = v => (v ? yen(v) : '');
+  let S = {cash: 0, bank: 0, fee: 0, off: 0}, E = 0, cnt = {match: 0, diff: 0, todo: 0, ok: 0};
+  const colTot = {}; ks.forEach(k => colTot[k.k] = 0);
+  let rows = '';
+  const notes = [];
+  for (let d = 1; d <= days; d++) {
+    const r = depCalc(d), s = r.s, wd = new Date(Y, MO - 1, d).getDay();
+    S.cash += s.cash; S.bank += s.bank; S.fee += s.fee; S.off += s.off || 0; E += r.E;
+    ks.forEach(k => { const c = (DEP.cm[d] || {})[k.k]; if (c) colTot[k.k] += c.amount; });
+    let st = '';
+    if (r.ok && r.st !== 'match') { st = '確認済'; cnt.ok++; }
+    else if (r.st === 'match' || r.st === 'split') { st = '✓'; cnt.match++; }
+    else if (r.st === 'diff') { st = '差異 ' + (r.diff > 0 ? '+' : '') + yen(r.diff); cnt.diff++; }
+    else if (r.st === 'todo') { st = '未入力'; cnt.todo++; }
+    if (r.note) notes.push(d + '日: ' + r.note + (r.ok ? '（確認済み）' : ''));
+    const cls = (wd === 0 ? 'su ' : wd === 6 ? 'sa ' : '') + (r.st === 'diff' ? 'bad' : r.st === 'todo' ? 'todo' : '');
+    rows += `<tr class="${cls}"><td class="d">${d} ${WD[wd]}</td><td>${z(s.cash)}</td><td>${z(s.bank)}</td><td>${z(s.fee)}</td>
+      ${ks.map(k => { const c = (DEP.cm[d] || {})[k.k]; return '<td>' + (c ? yen(c.amount) : '') + '</td>'; }).join('')}
+      <td class="b">${r.any ? yen(r.E) : ''}</td><td class="st">${st}</td></tr>`;
+  }
+  const St = S.cash + S.bank + S.fee, df = E - St;
+  const tot = `<tr class="tot"><td class="d">月計</td><td>${yen(S.cash)}</td><td>${yen(S.bank)}</td><td>${yen(S.fee)}</td>${ks.map(k => '<td>' + yen(colTot[k.k]) + '</td>').join('')}<td class="b">${yen(E)}</td><td class="st">${df ? (df > 0 ? '+' : '') + yen(df) : '一致'}</td></tr>`;
+  const css = `@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{font-family:"Hiragino Sans","Yu Gothic","Meiryo",sans-serif;color:#111;margin:0;font-size:8pt}
+    h1{font-size:13pt;margin:0 0 2px}.sub{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:4px;font-size:8.5pt}
+    table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:.4pt solid #666;padding:1.2pt 2.5pt;text-align:right;white-space:nowrap;overflow:hidden;font-size:7.6pt;line-height:1.25}
+    th{background:#e5e7eb;text-align:center;font-weight:600;font-size:7.2pt}td.d{text-align:left;font-weight:600}td.st{text-align:left;font-size:7pt}td.b{font-weight:600}
+    tr.su td{background:#fdecec}tr.sa td{background:#eaf2ff}tr.bad td{background:#ffdcd8}tr.todo td{background:#fff3cc}tr.tot td{background:#e5e7eb;font-weight:700;border-top:1.2pt solid #333}
+    .g{background:#d0d5dd}.note{margin-top:5px;font-size:7.5pt}.note div{margin:1px 0}.foot{margin-top:4px;font-size:7pt;color:#555}`;
+  const head = `<tr><th rowspan="2" style="width:9%">日</th><th colspan="3" class="g">スマイル（実績）</th><th colspan="${ks.length}" class="g">実際の入金（入力）</th><th rowspan="2" style="width:7%">入力計</th><th rowspan="2" style="width:10%">照合</th></tr>
+    <tr><th>現金</th><th>振込等</th><th>手数料</th>${ks.map(k => `<th>${esc(k.n)}</th>`).join('')}</tr>`;
+  const now = new Date(), stamp = now.getFullYear() + '/' + (now.getMonth() + 1) + '/' + now.getDate();
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>入金照合表 ${Y}年${MO}月</title><style>${css}</style></head><body>
+    <div class="sub"><div><h1>入金照合表　${Y}年${MO}月（${wareki}）</h1><span>${esc(co)}</span></div>
+    <div style="text-align:right">スマイル計 ${yen(St)}　入力計 ${yen(E)}　差額 ${df ? (df > 0 ? '+' : '') + yen(df) : '0'}<br>一致 ${cnt.match}日　差異 ${cnt.diff}日　未入力 ${cnt.todo}日　確認済み ${cnt.ok}日</div></div>
+    <table><thead>${head}</thead><tbody>${rows}${tot}</tbody></table>
+    ${notes.length ? '<div class="note"><b>メモ</b>' + notes.map(t => '<div>' + esc(t) + '</div>').join('') + '</div>' : ''}
+    <div class="foot">出力日 ${stamp}　※「振込等」は振込・手形・口振・カード・預け金。相殺・貸倒は、お金が動かないため照合の対象外です。</div></body></html>`;
+}
+function depPrint(){
+  if (!DEP.data || !DEP.cm) return alert('画面の読み込みが終わってから押してください');
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  setTimeout(() => viewDoc({html: depPrintHtml()}), 150);   // 入力中の欄の保存を待つ
 }
 function depSumHtml(){
   let S = {cash: 0, bank: 0, fee: 0}, E = 0, cnt = {match: 0, split: 0, todo: 0, diff: 0, ok: 0};
