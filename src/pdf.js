@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.10  (2026-10-07)
+// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
 import { CONFIG } from './config.js';
 
 export const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -32,6 +32,7 @@ export function quoteHtml(b, co) {
     '<p style="font-size:14pt">御見積金額 <b>¥' + yen(b.q.total) + '-</b> (税込)</p>' +
     '<table><tr><th>品名</th><th style="width:14%">数量</th><th style="width:15%">単価</th><th style="width:16%">金額</th><th style="width:20%">備考</th></tr>' + rows +
     '<tr class="tot"><td colspan="3" class="r">小計</td><td class="r">' + yen(b.q.subtotal) + '</td><td></td></tr>' +
+    (Number(b.q.shipping) ? '<tr class="tot"><td colspan="3" class="r">送料</td><td class="r">' + yen(b.q.shipping) + '</td><td></td></tr>' : '') +
     '<tr class="tot"><td colspan="3" class="r">消費税 (' + esc(b.q.taxRate) + '%)</td><td class="r">' + yen(b.q.tax) + '</td><td></td></tr>' +
     '<tr class="tot"><td colspan="3" class="r">合計</td><td class="r">' + yen(b.q.total) + '</td><td></td></tr></table>' +
     '<p>備考: ' + esc(b.q.note).replace(/\n/g, '<br>') + '</p>' + footer(co);

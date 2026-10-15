@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.10  (2026-10-07)
+// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
 // 自社情報・テーブル定義(ここを書き換えると反映されます)
 export const CONFIG = {
   company: {
@@ -29,7 +29,7 @@ export const CONFIG = {
 export const TABLES = {
   customers: ['id', 'name', 'contact', 'address', 'tel', 'email', 'memo', 'created', 'code'],
   projects: ['id', 'customerId', 'name', 'status', 'memo', 'created'],
-  quotes: ['id', 'no', 'projectId', 'issueDate', 'validUntil', 'subject', 'note', 'subtotal', 'tax', 'total', 'taxRate', 'author', 'created', 'updated', 'result', 'resultOn'],
+  quotes: ['id', 'no', 'projectId', 'issueDate', 'validUntil', 'subject', 'note', 'subtotal', 'tax', 'total', 'taxRate', 'author', 'created', 'updated', 'result', 'resultOn', 'shipping'],
   lines: ['quoteId', 'row', 'item', 'qty', 'unit', 'price', 'amount', 'note', 'cost'],
   requests: ['id', 'projectId', 'vendor', 'requestedOn', 'dueOn', 'answeredOn', 'amount', 'status', 'memo', 'photos', 'author', 'created', 'detail'],
   memos: ['id', 'customerId', 'who', 'kind', 'body', 'status', 'author', 'created', 'updated', 'projectId'],
@@ -37,7 +37,7 @@ export const TABLES = {
 };
 // 数値として返す列(空は空文字)
 export const NUMERIC = {
-  quotes: ['subtotal', 'tax', 'total', 'taxRate'],
+  quotes: ['subtotal', 'tax', 'total', 'taxRate', 'shipping'],
   lines: ['row', 'qty', 'price', 'amount', 'cost'],
   requests: ['amount'],
 };

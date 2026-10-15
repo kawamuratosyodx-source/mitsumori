@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.10  (2026-10-07)
+// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -308,8 +308,10 @@ const API = {
     });
     q.taxRate = isNaN(rate) || q.taxRate === '' ? CONFIG.defaultTaxRate : rate;
     q.subtotal = sub;
-    q.tax = Math.floor(sub * q.taxRate / 100);
-    q.total = q.subtotal + q.tax;
+    const ship = Math.max(0, Math.round(Number(q.shipping) || 0));
+    q.shipping = ship || '';
+    q.tax = Math.floor((sub + ship) * q.taxRate / 100);
+    q.total = q.subtotal + ship + q.tax;
     q.updated = nowStr();
     if (!q.result) q.result = '未定';
     if (!q.id) q.id = newId();

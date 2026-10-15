@@ -2,7 +2,7 @@
 export const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS \"customers\" ( \"id\" TEXT PRIMARY KEY, \"name\" TEXT, \"contact\" TEXT, \"address\" TEXT, \"tel\" TEXT, \"email\" TEXT, \"memo\" TEXT, \"created\" TEXT, \"code\" TEXT )",
   "CREATE TABLE IF NOT EXISTS \"projects\" ( \"id\" TEXT PRIMARY KEY, \"customerId\" TEXT, \"name\" TEXT, \"status\" TEXT, \"memo\" TEXT, \"created\" TEXT )",
-  "CREATE TABLE IF NOT EXISTS \"quotes\" ( \"id\" TEXT PRIMARY KEY, \"no\" TEXT, \"projectId\" TEXT, \"issueDate\" TEXT, \"validUntil\" TEXT, \"subject\" TEXT, \"note\" TEXT, \"subtotal\" TEXT, \"tax\" TEXT, \"total\" TEXT, \"taxRate\" TEXT, \"author\" TEXT, \"created\" TEXT, \"updated\" TEXT, \"result\" TEXT, \"resultOn\" TEXT )",
+  "CREATE TABLE IF NOT EXISTS \"quotes\" ( \"id\" TEXT PRIMARY KEY, \"no\" TEXT, \"projectId\" TEXT, \"issueDate\" TEXT, \"validUntil\" TEXT, \"subject\" TEXT, \"note\" TEXT, \"subtotal\" TEXT, \"tax\" TEXT, \"total\" TEXT, \"taxRate\" TEXT, \"author\" TEXT, \"created\" TEXT, \"updated\" TEXT, \"result\" TEXT, \"resultOn\" TEXT, \"shipping\" TEXT )",
   "CREATE TABLE IF NOT EXISTS \"lines\" ( \"quoteId\" TEXT, \"row\" TEXT, \"item\" TEXT, \"qty\" TEXT, \"unit\" TEXT, \"price\" TEXT, \"amount\" TEXT, \"note\" TEXT, \"cost\" TEXT )",
   "CREATE TABLE IF NOT EXISTS \"requests\" ( \"id\" TEXT PRIMARY KEY, \"projectId\" TEXT, \"vendor\" TEXT, \"requestedOn\" TEXT, \"dueOn\" TEXT, \"answeredOn\" TEXT, \"amount\" TEXT, \"status\" TEXT, \"memo\" TEXT, \"photos\" TEXT, \"author\" TEXT, \"created\" TEXT, \"detail\" TEXT )",
   "CREATE TABLE IF NOT EXISTS \"memos\" ( \"id\" TEXT PRIMARY KEY, \"customerId\" TEXT, \"who\" TEXT, \"kind\" TEXT, \"body\" TEXT, \"status\" TEXT, \"author\" TEXT, \"created\" TEXT, \"updated\" TEXT, \"projectId\" TEXT )",

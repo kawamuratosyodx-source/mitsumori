@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.10.10  (2026-10-07)
+// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1386,8 +1386,9 @@ async function quoteToRequest(){
 }
 function calc(){
   const sub = view.lines.reduce((s, l) => s + Math.round((Number(l.qty) || 0) * (Number(l.price) || 0)), 0);
-  const tax = Math.floor(sub * (Number(view.q.taxRate) || 0) / 100);
-  return {sub: sub, tax: tax, total: sub + tax};
+  const ship = Math.max(0, Math.round(Number(view.q.shipping) || 0));
+  const tax = Math.floor((sub + ship) * (Number(view.q.taxRate) || 0) / 100);
+  return {sub: sub, ship: ship, tax: tax, total: sub + ship + tax};
 }
 function profitOf(lines){
   const cl = lines.filter(l => l.cost !== '' && l.cost != null);
@@ -1422,7 +1423,7 @@ function projSummary(pid){
 const pct = (a, b) => b ? Math.round(a / b * 1000) / 10 + '%' : '-';
 function upd(){
   const t = calc(), pf = profitOf(view.lines);
-  $('#tot').innerHTML = `小計 ¥${yen(t.sub)}<br>消費税 ¥${yen(t.tax)}<br><b style="font-size:18px">合計 ¥${yen(t.total)}</b>` +
+  $('#tot').innerHTML = `小計 ¥${yen(t.sub)}<br>${t.ship ? '送料 ¥' + yen(t.ship) + '<br>' : ''}消費税 ¥${yen(t.tax)}<br><b style="font-size:18px">合計 ¥${yen(t.total)}</b>` +
     (pf.n ? `<div class="mute" style="margin-top:6px">粗利 ¥${yen(pf.profit)}（${pf.rev ? Math.round(pf.profit / pf.rev * 1000) / 10 : 0}%）※原価を入力した${pf.n}行の分・PDFには載りません</div>` : '');
 }
 V.quote = () => {
@@ -1450,6 +1451,7 @@ V.quote = () => {
       <select onchange="pickCost(${i},this.value)"><option value="">仕入先の回答から原価を入れる</option>${DB.requests.filter(r => r.projectId === q.projectId && r.amount !== '' && r.amount != null && !reqLinesOf(r.id).some(l => l.price !== '')).map(r => `<option value="${esc(r.amount)}">${esc(r.vendor)} ¥${yen(r.amount)}（合計）</option>`).join('')}${DB.requests.filter(r => r.projectId === q.projectId).map(r => reqLinesOf(r.id).filter(l => l.price !== '').map(l => `<option value="u${l.price}">${esc(r.vendor)}：${esc(l.item)} @¥${yen(l.price)}</option>`).join('')).join('')}</select></div>
     <div class="row" style="margin-top:6px"><input class="sp" placeholder="備考" value="${esc(l.note)}" oninput="view.lines[${i}].note=this.value"><button onclick="applyMarkup(${i})">率で単価</button><button class="dng" onclick="delLine(${i})">削除</button></div></div>`).join('')}
   <button onclick="addLine()">＋行を追加</button>
+  <label>送料（税抜・円）</label><input type="text" inputmode="decimal" placeholder="なければ空欄" value="${esc(fmtNum(q.shipping))}" oninput="numIn(this,event);view.q.shipping=rawNum(this.value);upd()" oncompositionend="numIn(this);view.q.shipping=rawNum(this.value);upd()" onchange="numIn(this);view.q.shipping=rawNum(this.value);upd()">
   <div class="card tot" id="tot" style="margin-top:12px"></div>
   <label>備考</label><textarea oninput="view.q.note=this.value">${esc(q.note)}</textarea>
   <div class="row" style="margin-top:14px"><button class="pri" onclick="saveQuote()">保存</button>${q.id ? '<button class="dng" onclick="delQuote()">削除</button>' : ''}</div>`;
@@ -1490,7 +1492,7 @@ async function expXlsx(id){
   const aoa = [['御見積書'], [co.name || ''], [co.address || ''], [[co.tel ? 'TEL ' + co.tel : '', co.fax ? 'FAX ' + co.fax : ''].filter(Boolean).join('　')], [co.regNo ? '登録番号: ' + co.regNo : ''], ['宛先', (b.c.name || '') + ' 御中'], ['件名', b.q.subject], ['見積番号', b.q.no], ['発行日', b.q.issueDate], ['有効期限', b.q.validUntil], [],
     ['品名', '数量', '単位', '単価', '金額', '備考']]
     .concat(b.lines.map(l => [l.item, l.qty, l.unit, l.price, l.amount, l.note]))
-    .concat([[], ['', '', '', '小計', b.q.subtotal], ['', '', '', '消費税(' + b.q.taxRate + '%)', b.q.tax], ['', '', '', '合計', b.q.total], [], ['備考', b.q.note]].concat(co.bank ? [['お振込先', co.bank]] : []).concat(co.note ? [['', co.note]] : []));
+    .concat([[], ['', '', '', '小計', b.q.subtotal]].concat(Number(b.q.shipping) ? [['', '', '', '送料', b.q.shipping]] : []).concat([['', '', '', '消費税(' + b.q.taxRate + '%)', b.q.tax], ['', '', '', '合計', b.q.total], [], ['備考', b.q.note]]).concat(co.bank ? [['お振込先', co.bank]] : []).concat(co.note ? [['', co.note]] : []));
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:34},{wch:8},{wch:8},{wch:12},{wch:14},{wch:24}];
   Object.keys(ws).forEach(a => { if (a[0] !== '!' && ws[a].t === 'n' && a[0] !== 'B') ws[a].z = '#,##0'; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '見積書');

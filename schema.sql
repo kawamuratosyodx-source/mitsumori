@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS "quotes" (
   "created" TEXT,
   "updated" TEXT,
   "result" TEXT,
-  "resultOn" TEXT
+  "resultOn" TEXT,
+  "shipping" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS "lines" (
