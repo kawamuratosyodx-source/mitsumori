@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.13.0  (2026-10-16)
+// 業務管理 河村図書教材社  v2.13.1  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1062,8 +1062,8 @@ function memoListHtml(){
   const col = {'未対応': '#fde8e8', '対応中': '#fff4e0', '完了': '#e6f4ea'};
   return list.slice(0, 200).map(m => {
     const c = cust(m.customerId), lines = String(m.body || '').split('\n');
-    return `<div class="card click" onclick="editMemo('${m.id}')"><div class="row"><b class="sp">${esc(lines[0].slice(0, 60) || '(無題)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
-    <div class="mute">${esc(c.name || '')} ${esc(m.who)}</div>
+    return `<div class="card click" onclick="editMemo('${m.id}')"><div class="row"><b class="sp" style="font-size:16px">${esc(c.name || m.who || '(顧客なし)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
+    <div style="font-weight:600;margin-top:2px">${esc(lines[0].slice(0, 60) || '(無題)')}</div>${c.name && m.who ? `<div class="mute">${esc(m.who)}</div>` : ''}
     <div class="mute">📅 ${esc(memoDay(m))}　<span class="badge" style="background:${m.slipDone === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">伝票入力 ${m.slipDone === '済' ? '済' : '未'}</span> <span class="badge" style="background:${m.ordered === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">メーカー注文 ${m.ordered === '済' ? '済' : '未'}</span></div>
     <div class="mute">${esc(stampHtml(m))}</div>
     ${m.photos ? `<div class="thumbs">${memoThumbs(m)}</div>` : ''}
