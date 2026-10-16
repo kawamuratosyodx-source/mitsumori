@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.13.1  (2026-10-16)
+// 業務管理 河村図書教材社  v2.13.2  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -518,7 +518,7 @@ function fld(f, v){
   const val = v[f.k] == null ? '' : v[f.k];
   const id = 'f_' + f.k;
   if (f.t === 'textarea') return `<label>${f.l}</label><textarea id="${id}" rows="${f.rows || 3}">${esc(val)}</textarea>`;
-  if (f.t === 'select') return `<label>${f.l}</label><select id="${id}" ${f.blank ? 'data-blank="1"' : ''} ${f.blankText ? 'data-bt="' + esc(f.blankText) + '"' : ''}>${f.o.map(o => `<option value="${esc(o[0])}" ${String(o[0]) === String(val) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
+  if (f.t === 'select') return `<label>${f.l}</label><select id="${id}" ${f.oc ? 'onchange="' + f.oc + '"' : ''} ${f.blank ? 'data-blank="1"' : ''} ${f.blankText ? 'data-bt="' + esc(f.blankText) + '"' : ''}>${f.o.map(o => `<option value="${esc(o[0])}" ${String(o[0]) === String(val) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
   if (f.t === 'money') return `<label>${f.l}</label><input id="${id}" type="text" inputmode="numeric" value="${esc(fmtNum(val))}" oninput="numIn(this,event)" oncompositionend="numIn(this)" onchange="numIn(this)">`;
   return `<label>${f.l}</label><input id="${id}" type="${f.t || 'text'}" value="${esc(val)}"${f.oi ? ` oninput="${f.oi}"` : ''}>`;
 }
@@ -528,7 +528,7 @@ V.form = () => {
   <div class="row" style="margin-top:14px"><button class="pri" onclick="submitForm()">保存</button><button onclick="history_back()">キャンセル</button><span class="sp"></span>${c.onDelete ? '<button class="dng" onclick="delForm()">削除</button>' : ''}</div></div>`;
 };
 const newLine = () => ({item:'',qty:1,unit:'式',price:0,note:'',cost:''});
-function openForm(cfg){ backView = view; go('form', {cfg: cfg}); }
+function openForm(cfg){ backView = view; go('form', {cfg: cfg}); if (cfg.onOpen) cfg.onOpen(); }
 function history_back(){ view = backView || {n:'menu'}; render(); }
 async function submitForm(){
   const c = view.cfg; const o = Object.assign({}, c.vals);
@@ -1062,13 +1062,14 @@ function memoListHtml(){
   const col = {'未対応': '#fde8e8', '対応中': '#fff4e0', '完了': '#e6f4ea'};
   return list.slice(0, 200).map(m => {
     const c = cust(m.customerId), lines = String(m.body || '').split('\n');
-    return `<div class="card click" onclick="editMemo('${m.id}')"><div class="row"><b class="sp" style="font-size:16px">${esc(c.name || m.who || '(顧客なし)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
+    const yel = YELLOW_AREA.test(c.address || '');
+    return `<div class="card click" style="${yel ? 'background:#fff7b0' : ''}" onclick="editMemo('${m.id}')"><div class="row"><b class="sp" style="font-size:16px">${esc(c.name || m.who || '(顧客なし)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
     <div style="font-weight:600;margin-top:2px">${esc(lines[0].slice(0, 60) || '(無題)')}</div>${c.name && m.who ? `<div class="mute">${esc(m.who)}</div>` : ''}
-    <div class="mute">📅 ${esc(memoDay(m))}　<span class="badge" style="background:${m.slipDone === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">伝票入力 ${m.slipDone === '済' ? '済' : '未'}</span> <span class="badge" style="background:${m.ordered === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">メーカー注文 ${m.ordered === '済' ? '済' : '未'}</span></div>
+    <div class="mute">📅 ${esc(memoDay(m))}${NOSLIP(m.kind) ? '' : `　<span class="badge" style="background:${m.slipDone === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">伝票入力 ${m.slipDone === '済' ? '済' : '未'}</span> <span class="badge" style="background:${m.ordered === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">メーカー注文 ${m.ordered === '済' ? '済' : '未'}</span>`}</div>
     <div class="mute">${esc(stampHtml(m))}</div>
     ${m.photos ? `<div class="thumbs">${memoThumbs(m)}</div>` : ''}
     ${lines.length > 1 ? `<div style="white-space:pre-wrap;margin-top:4px;max-height:4.5em;overflow:hidden">${esc(lines.slice(1).join('\n'))}</div>` : ''}
-    <div class="row" style="margin-top:6px" onclick="event.stopPropagation()">${m.status !== '完了' ? `<button onclick="markMemo('${m.id}','完了')">完了にする</button>` : ''}<button onclick="toggleMemo('${m.id}','slipDone')">${m.slipDone === '済' ? '伝票入力を未に戻す' : '伝票入力済にする'}</button><button onclick="toggleMemo('${m.id}','ordered')">${m.ordered === '済' ? 'メーカー注文を未に戻す' : 'メーカー注文済にする'}</button><button onclick="memoPrint('${m.id}')">🖨 印刷</button></div></div>`;
+    <div class="row" style="margin-top:6px" onclick="event.stopPropagation()">${m.status !== '完了' ? `<button onclick="markMemo('${m.id}','完了')">完了にする</button>` : ''}${NOSLIP(m.kind) ? '' : `<button onclick="toggleMemo('${m.id}','slipDone')">${m.slipDone === '済' ? '伝票入力を未に戻す' : '伝票入力済にする'}</button><button onclick="toggleMemo('${m.id}','ordered')">${m.ordered === '済' ? 'メーカー注文を未に戻す' : 'メーカー注文済にする'}</button>`}<button onclick="memoPrint('${m.id}')">🖨 印刷</button></div></div>`;
   }).join('') || '<p class="mute">メモはありません</p>';
 }
 async function markMemo(id, status){
@@ -1090,7 +1091,7 @@ function memoPrintHtml(m){
     .body{white-space:pre-wrap;word-break:break-word;border:.5pt solid #777;padding:10px 12px;min-height:120mm;font-size:11.5pt}.foot{margin-top:8px;font-size:8.5pt;color:#555}`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>メモ ${esc(title)}</title><style>${css}</style></head><body>
     <div class="co"><span>${esc(co)}</span><span>メモ</span></div><h1>${esc(title)}</h1>
-    <table>${row('日付', memoDay(m))}${row('種別', m.kind)}${row('伝票入力', m.slipDone === '済' ? '済' : '未')}${row('メーカーへの注文', m.ordered === '済' ? '済' : '未')}${row('対応状況', m.status)}${row('顧客', c.name ? c.name + (c.code ? '（' + c.code + '）' : '') : '')}${row('相手先・担当者', m.who)}${row('関連する案件', pj)}${row('作成・更新', stampHtml(m))}</table>
+    <table>${row('日付', memoDay(m))}${row('種別', m.kind)}${NOSLIP(m.kind) ? '' : row('伝票入力', m.slipDone === '済' ? '済' : '未') + row('メーカーへの注文', m.ordered === '済' ? '済' : '未')}${row('対応状況', m.status)}${row('顧客', c.name ? c.name + (c.code ? '（' + c.code + '）' : '') : '')}${row('相手先・担当者', m.who)}${row('関連する案件', pj)}${row('作成・更新', stampHtml(m))}</table>
     <div class="body">${rest ? esc(rest) : '<span style="color:#999">（本文なし）</span>'}</div>
     <div class="foot">出力日 ${stamp}</div></body></html>`;
 }
@@ -1137,6 +1138,12 @@ async function memoUploadPending(id){
   const fs = MPEND.splice(0);
   for (const f of fs) { try { await memoUpload(id, f); } catch (e) { /* run()で通知済み */ } }
 }
+const NOSLIP = k => k === '集金';   // 集金のメモは、伝票入力・メーカー注文の入力が要らない
+const YELLOW_AREA = /豊川市|新城市/;
+function memoKindChg(){
+  const off = NOSLIP(($('#f_kind') || {}).value);
+  ['slipDone', 'ordered'].forEach(k => { const e = $('#f_' + k); if (!e) return; if (off) e.value = ''; e.disabled = off; });
+}
 function memoKinds(cur){
   const k = (DB.memoKinds && DB.memoKinds.length ? DB.memoKinds : ['問い合わせ','注文','依頼','見積','集金','連絡事項','クレーム','その他']).slice();
   if (cur && !k.includes(cur)) k.push(cur);
@@ -1157,13 +1164,13 @@ function editMemo(id){
       {k:'customerId',l:'顧客',t:'select',blank:true,o:[['', '（顧客なし・未登録の相手）']].concat(DB.customers.map(c => [c.id, c.name + '（' + c.code + '）']))},
       {k:'who',l:'相手先・担当者名（顧客未登録の場合など）'},
       {k:'memoDate',l:'日付（過去の日付にもできます）',t:'date'},
-      {k:'kind',l:'種別（追加・変更はメニューの「会社情報」から）',t:'select',o:kinds.map(x => [x, x])},
+      {k:'kind',l:'種別（追加・変更はメニューの「会社情報」から）',t:'select',oc:'memoKindChg()',o:kinds.map(x => [x, x])},
       {k:'slipDone',l:'伝票入力',t:'select',o:[['', '未'], ['済', '済']]},
       {k:'ordered',l:'メーカーへの注文',t:'select',o:[['', '未'], ['済', '済']]},
       {k:'status',l:'対応状況',t:'select',o:['未対応','対応中','完了'].map(x => [x, x])},
       {k:'body',l:'内容（1行目が見出しになります）',t:'textarea',rows:9}],
     extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + `<div class="row" style="margin-top:10px"><button onclick="memoPrintForm()">🖨 このメモを印刷</button></div>` + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + memoPhotoBox(vals),
-    onDelete: !!id, afterDelete: () => go('memos'), after: async (s) => { await memoUploadPending(s.id); await reload0(); go('memos'); }});
+    onDelete: !!id, afterDelete: () => go('memos'), onOpen: memoKindChg, after: async (s) => { await memoUploadPending(s.id); await reload0(); go('memos'); }});
 }
 
 // ---------- 案件 ----------

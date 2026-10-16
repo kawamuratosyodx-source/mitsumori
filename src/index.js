@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.13.1  (2026-10-16)
+// 業務管理 河村図書教材社  v2.13.2  (2026-10-16)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -258,7 +258,7 @@ const API = {
       const cur = (await readAll(env, 'requests', '"id" = ?', obj.id))[0];
       obj.photos = cur ? cur.photos : '';
     }
-    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(obj.memoDate || ''))) obj.memoDate = String(obj.created).slice(0, 10); obj.slipDone = obj.slipDone === '済' ? '済' : ''; obj.ordered = obj.ordered === '済' ? '済' : ''; const cur = (await readAll(env, 'memos', '"id" = ?', obj.id))[0]; obj.photos = cur ? cur.photos : ''; }
+    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(obj.memoDate || ''))) obj.memoDate = String(obj.created).slice(0, 10); const noSlip = obj.kind === '集金'; obj.slipDone = !noSlip && obj.slipDone === '済' ? '済' : ''; obj.ordered = !noSlip && obj.ordered === '済' ? '済' : ''; const cur = (await readAll(env, 'memos', '"id" = ?', obj.id))[0]; obj.photos = cur ? cur.photos : ''; }
     await env.DB.batch([upsertStmt(env, key, obj), bumpStmt(env, key)]);
     return obj;
   },
