@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.13.2  (2026-10-16)
+// 業務管理 河村図書教材社  v2.14.0  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1025,16 +1025,20 @@ function editVendor(id){
 
 // ---------- メモ帳 ----------
 // メモ一覧の絞り込み・並べ方(この端末で覚えておく)
-const MOPT = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('memoopt') || '{}') || {}; } catch (e) {} return {ms: o.ms || '', so: o.so || 'new'}; })();
+const MOPT = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('memoopt') || '{}') || {}; } catch (e) {} return {ms: o.ms || '', so: o.so || 'new', kd: o.kd || '', sl: o.sl || '', od: o.od || ''}; })();
 function memoOpt(k, v){ MOPT[k] = v; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mlist').innerHTML = memoListHtml(); }
 const memoOpen = m => m.status !== '完了';
 V.memos = () => {
   const cnt = f => DB.memos.filter(f).length;
   const fo = [['', 'すべて（' + DB.memos.length + '）'], ['open', '未完了（' + cnt(memoOpen) + '）'], ['完了', '完了（' + cnt(m => !memoOpen(m)) + '）'], ['未対応', '　未対応（' + cnt(m => m.status === '未対応') + '）'], ['対応中', '　対応中（' + cnt(m => m.status === '対応中') + '）']];
-  const so = [['new', '新しい順'], ['open', '未完了を先に'], ['done', '完了を先に']];
+  const so = [['new', '新しい順'], ['kind', '種別順'], ['slip', '伝票入力が未を先に'], ['ord', 'メーカー注文が未を先に'], ['open', '未完了を先に'], ['done', '完了を先に']];
+  const kl = memoKindsAll(), kopt = [['', 'すべての種別']].concat(kl.map(k => [k, k + '（' + cnt(m => m.kind === k) + '）']));
   return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button class="pri" onclick="editMemo()">＋メモ</button></div>
   <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()"></div>
   <div class="bar"><select style="width:auto" onchange="memoOpt('ms',this.value)">${fo.map(o => `<option value="${o[0]}" ${MOPT.ms === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+  <select style="width:auto" onchange="memoOpt('kd',this.value)">${kopt.map(o => `<option value="${esc(o[0])}" ${MOPT.kd === o[0] ? 'selected' : ''}>${o[0] === '' ? '種別: ' : ''}${esc(o[1])}</option>`).join('')}</select>
+  <select style="width:auto" onchange="memoOpt('sl',this.value)">${[['', '伝票入力: すべて'], ['no', '伝票入力: 未'], ['yes', '伝票入力: 済']].map(o => `<option value="${o[0]}" ${MOPT.sl === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+  <select style="width:auto" onchange="memoOpt('od',this.value)">${[['', 'メーカー注文: すべて'], ['no', 'メーカー注文: 未'], ['yes', 'メーカー注文: 済']].map(o => `<option value="${o[0]}" ${MOPT.od === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
   <select style="width:auto" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select></div>
   <div id="mlist">${memoListHtml()}</div>`;
 };
@@ -1046,24 +1050,36 @@ function stampHtml(o){
   if (u && u !== c) parts.push('更新 ' + u);
   return parts.join('　／　');
 }
+// 設定の種別 + すでにメモで使われている種別(設定から消したものも含む)
+function memoKindsAll(){
+  const k = memoKinds();
+  DB.memos.forEach(m => { if (m.kind && !k.includes(m.kind)) k.push(m.kind); });
+  return k;
+}
 function memoListHtml(){
   const words = (view.mq || '').toLowerCase().split(/\s+/).filter(Boolean);
   const stamp = m => memoDay(m) + ' ' + String(m.updated || m.created || '');
   const list = DB.memos.filter(m => {
+    if (MOPT.kd && m.kind !== MOPT.kd) return false;
+    if (MOPT.sl && (NOSLIP(m.kind) || (m.slipDone === '済') !== (MOPT.sl === 'yes'))) return false;   // 集金は対象外
+    if (MOPT.od && (NOSLIP(m.kind) || (m.ordered === '済') !== (MOPT.od === 'yes'))) return false;
     if (MOPT.ms === 'open' ? !memoOpen(m) : MOPT.ms && m.status !== MOPT.ms) return false;
     const c = cust(m.customerId);
     const t = [m.body, m.who, m.kind, c.name, c.code].join(' ').toLowerCase();
     return words.every(w => t.includes(w));
   }).sort((a, b) => {
     const rk = m => m.status === '完了' ? 2 : m.status === '対応中' ? 1 : 0;   // 未対応 → 対応中 → 完了
+    const nd = (m, k) => NOSLIP(m.kind) ? 2 : m[k] === '済' ? 1 : 0;   // 未 → 済 → 対象外(集金)
+    if (MOPT.so === 'slip' || MOPT.so === 'ord') { const k = MOPT.so === 'slip' ? 'slipDone' : 'ordered', d = nd(a, k) - nd(b, k); if (d) return d; }
+    if (MOPT.so === 'kind') { const ks = memoKindsAll(), d = ks.indexOf(a.kind) - ks.indexOf(b.kind); if (d) return d; }
     const r = MOPT.so === 'open' ? rk(a) - rk(b) : MOPT.so === 'done' ? rk(b) - rk(a) : 0;
     return r || stamp(b).localeCompare(stamp(a));
   });
   const col = {'未対応': '#fde8e8', '対応中': '#fff4e0', '完了': '#e6f4ea'};
   return list.slice(0, 200).map(m => {
     const c = cust(m.customerId), lines = String(m.body || '').split('\n');
-    const yel = YELLOW_AREA.test(c.address || '');
-    return `<div class="card click" style="${yel ? 'background:#fff7b0' : ''}" onclick="editMemo('${m.id}')"><div class="row"><b class="sp" style="font-size:16px">${esc(c.name || m.who || '(顧客なし)')}</b><span class="badge">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#e5edff">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
+    const bg = YELLOW_AREA.test(c.address || '') ? '#fff7b0' : BLUE_AREA.test(c.address || '') ? '#d9eefc' : '';
+    return `<div class="card click" style="${bg ? 'background:' + bg : ''}" onclick="editMemo('${m.id}')"><div class="row"><b class="sp" style="font-size:16px">${esc(c.name || m.who || '(顧客なし)')}</b><span class="badge" style="background:#fff;border:1px solid #9ca3af;color:#333">${esc(m.kind)}</span>${m.projectId ? '<span class="badge" style="background:#fff;border:1px solid #9ca3af;color:#333">案件あり</span>' : ''}<span class="badge" style="background:${col[m.status] || '#eee'};color:#333">${esc(m.status)}</span></div>
     <div style="font-weight:600;margin-top:2px">${esc(lines[0].slice(0, 60) || '(無題)')}</div>${c.name && m.who ? `<div class="mute">${esc(m.who)}</div>` : ''}
     <div class="mute">📅 ${esc(memoDay(m))}${NOSLIP(m.kind) ? '' : `　<span class="badge" style="background:${m.slipDone === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">伝票入力 ${m.slipDone === '済' ? '済' : '未'}</span> <span class="badge" style="background:${m.ordered === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">メーカー注文 ${m.ordered === '済' ? '済' : '未'}</span>`}</div>
     <div class="mute">${esc(stampHtml(m))}</div>
@@ -1139,7 +1155,7 @@ async function memoUploadPending(id){
   for (const f of fs) { try { await memoUpload(id, f); } catch (e) { /* run()で通知済み */ } }
 }
 const NOSLIP = k => k === '集金';   // 集金のメモは、伝票入力・メーカー注文の入力が要らない
-const YELLOW_AREA = /豊川市|新城市/;
+const YELLOW_AREA = /豊川市|新城市/, BLUE_AREA = /豊橋市|田原市/;
 function memoKindChg(){
   const off = NOSLIP(($('#f_kind') || {}).value);
   ['slipDone', 'ordered'].forEach(k => { const e = $('#f_' + k); if (!e) return; if (off) e.value = ''; e.disabled = off; });
