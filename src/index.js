@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.12.0  (2026-10-16)
+// 業務管理 河村図書教材社  v2.13.0  (2026-10-16)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -258,7 +258,7 @@ const API = {
       const cur = (await readAll(env, 'requests', '"id" = ?', obj.id))[0];
       obj.photos = cur ? cur.photos : '';
     }
-    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(obj.memoDate || ''))) obj.memoDate = String(obj.created).slice(0, 10); obj.slipDone = obj.slipDone === '済' ? '済' : ''; obj.ordered = obj.ordered === '済' ? '済' : ''; }
+    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(obj.memoDate || ''))) obj.memoDate = String(obj.created).slice(0, 10); obj.slipDone = obj.slipDone === '済' ? '済' : ''; obj.ordered = obj.ordered === '済' ? '済' : ''; const cur = (await readAll(env, 'memos', '"id" = ?', obj.id))[0]; obj.photos = cur ? cur.photos : ''; }
     await env.DB.batch([upsertStmt(env, key, obj), bumpStmt(env, key)]);
     return obj;
   },
@@ -306,6 +306,10 @@ const API = {
       stmts.push(env.DB.prepare('DELETE FROM request_lines WHERE reqId = ?').bind(id));
       const r = (await readAll(env, 'requests', '"id" = ?', id))[0];
       if (r) for (const t of String(r.photos || '').split(',').filter(Boolean)) { try { await deleteFile(env, t.split('|')[0]); } catch (e) { /* 既に無い */ } }
+    }
+    if (key === 'memos') {
+      const mm = (await readAll(env, 'memos', '"id" = ?', id))[0];
+      if (mm) for (const t of String(mm.photos || '').split(',').filter(Boolean)) { try { await deleteFile(env, t.split('|')[0]); } catch (e) { /* 既に無い */ } }
     }
     stmts.push(delStmt(env, key, TABLES[key][0], id), bumpStmt(env, key));
     if (key === 'quotes') stmts.push(bumpStmt(env, 'lines'));
@@ -386,6 +390,40 @@ const API = {
     if (!r) return false;
     const left = String(r.photos || '').split(',').filter(x => x && x !== token);
     await env.DB.batch([env.DB.prepare('UPDATE "requests" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), requestId), bumpStmt(env, 'requests')]);
+    try { await deleteFile(env, String(token).split('|')[0]); } catch (e) { /* 既に無い */ }
+    return true;
+  },
+
+  // ----- メモの写真・書類(Googleドライブに保存) -----
+  async uploadMemoPhoto(env, ctx, memoId, dataUrl, name) {
+    const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
+    if (!m) throw fail('画像形式が不正です');
+    const isPdf = m[1] === 'application/pdf';
+    if (!isPdf && m[1].indexOf('image/') !== 0) throw fail('写真またはPDFのみ保存できます');
+    const r = (await readAll(env, 'memos', '"id" = ?', memoId))[0];
+    if (!r) throw fail('メモが見つかりません');
+    if (m[2].length > 8 * 1024 * 1024 * 4 / 3) throw fail('ファイルが大きすぎます（8MBまで）');
+    if (!driveConfigured(env)) throw fail('Googleドライブとの連携が設定されていないため、写真を保存できません。管理者に連携の設定を依頼してください。');
+    const id = newFileId();
+    const c = (await readAll(env, 'customers', '"id" = ?', r.customerId))[0] || {};
+    const title = String(r.body || '').split('\n')[0].trim().slice(0, 30);
+    const dn = ((r.memoDate || nowStr().slice(0, 10)) + ' メモ_' + [c.name || r.who, title, name].filter(Boolean).join('_')).replace(/[\\/:*?"<>|]/g, '-').slice(0, 150);
+    let gid;
+    try { gid = await driveUpload(env, dn, m[1], m[2]); }
+    catch (e) { console.error('drive upload', e && e.message); throw fail('Googleドライブに保存できませんでした。しばらくしてからもう一度お試しください。'); }
+    await env.DB.prepare('INSERT INTO "files" ("id","ctype","name","size","chunks","created") VALUES (?,?,?,?,?,?)').bind(id, m[1], String(name || ''), String(Math.floor(m[2].length * 3 / 4)), 'drive:' + gid, nowStr()).run();
+    const token = isPdf ? id + '|pdf' : id;
+    const ids = String(r.photos || '').split(',').filter(Boolean);
+    ids.push(token);
+    await env.DB.batch([env.DB.prepare('UPDATE "memos" SET "photos" = ? WHERE "id" = ?').bind(ids.join(','), memoId), bumpStmt(env, 'memos')]);
+    return token;
+  },
+
+  async removeMemoPhoto(env, ctx, memoId, token) {
+    const r = (await readAll(env, 'memos', '"id" = ?', memoId))[0];
+    if (!r) return false;
+    const left = String(r.photos || '').split(',').filter(x => x && x !== token);
+    await env.DB.batch([env.DB.prepare('UPDATE "memos" SET "photos" = ? WHERE "id" = ?').bind(left.join(','), memoId), bumpStmt(env, 'memos')]);
     try { await deleteFile(env, String(token).split('|')[0]); } catch (e) { /* 既に無い */ }
     return true;
   },
@@ -814,42 +852,7 @@ const API = {
     return out;
   },
 
-  // 手書きメモの文字起こし(Gemini)
-  async ocrImage(env, ctx, dataUrl) {
-    const m = /^data:(image\/.+?);base64,(.*)$/s.exec(dataUrl || '');
-    if (!m) throw fail('画像形式が不正です');
-    if (!env.GEMINI_API_KEY) return { text: '', engine: 'none', note: '文字起こしの設定（GEMINI_API_KEY）がまだ行われていません。管理者に連絡してください。' };
-    // 古いモデルは、新しい利用者には使えなくなることがある。指定のモデルが使えない(404)ときは、次の候補を順に試す
-    const models = Array.from(new Set([env.GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
-    let lastErr = '';
-    for (const model of models) {
-      try {
-        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: GEMINI_PROMPT }, { inline_data: { mime_type: m[1], data: m[2] } }] }],
-            generationConfig: { temperature: 0 },
-          }),
-        });
-        // 使えない(404)・混み合っている(503)・回数制限(429)・一時的な不具合(500)のときは、次のモデルを試す
-        if ([404, 429, 500, 503].includes(res.status)) { lastErr = model + ' ' + res.status + ': ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 120); continue; }
-        if (!res.ok) throw new Error('Gemini ' + res.status + ' (' + model + '): ' + (await res.text()).replace(/\s+/g, ' ').slice(0, 200));
-        const j = await res.json();
-        const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
-        return { text: parts.map(p => p.text || '').join('').trim(), engine: 'gemini' };
-      } catch (e) {
-        return { text: '', engine: 'none', note: '文字起こしに失敗しました。しばらくしてからもう一度お試しください。\n(' + String(e.message || e).slice(0, 200) + ')' };
-      }
-    }
-    return { text: '', engine: 'none', note: '文字起こしのAIが混み合っているか、使えません。少し時間をおいて、もう一度お試しください。\n(' + lastErr + ')' };
-  },
 };
-
-const GEMINI_PROMPT = 'これは手書きのメモ(日本語)の写真です。書かれている文字を、見たとおりに文字起こししてください。' +
-  '改行・箇条書き・段落の区切りは元のメモに合わせ、表や矢印は文字で分かるように書いてください。' +
-  '推測で内容を足したり、要約や説明を付けたりしないでください。読み取れない部分は【判読不能】と書いてください。' +
-  '出力は文字起こしの本文だけにしてください。';
 
 async function bundle(env, quoteId) {
   const q = (await readAll(env, 'quotes', '"id" = ?', quoteId))[0];
@@ -962,13 +965,15 @@ const BUMPMAP = {
   saveQuote: () => ['quotes', 'lines'],
   saveRequest: () => ['requests', 'reqLines'],
   uploadPhoto: () => ['requests'],
+  uploadMemoPhoto: () => ['memos'],
+  removeMemoPhoto: () => ['memos'],
   removePhoto: () => ['requests'],
   purgeFiles: () => ['requests'],
   importCustomers: () => ['customers'],
 };
 // 表が変わらない操作(読み取りだけ、または別の置き場所を使うもの)
 const NOBUMP = new Set(['getAll', 'getStorage', 'listFiles', 'driveStatus', 'driveTest', 'getLogs', 'getCompany', 'saveCompany', 'saveMemoKinds',
-  'changePassword', 'getQuoteBundle', 'makePdf', 'makeRequestPdf', 'makeCsv', 'ocrImage',
+  'changePassword', 'getQuoteBundle', 'makePdf', 'makeRequestPdf', 'makeCsv',
   'salesBatches', 'salesBegin', 'salesAdd', 'salesFinish', 'salesDelete', 'salesSearch', 'salesTax',
   'depMonths', 'depMonth', 'depDay', 'depSet', 'depNote', 'depImportBegin', 'depImportAdd', 'depImportCells', 'depAccounts',
   'backupInfo', 'backupRead', 'backupDone']);
@@ -1100,7 +1105,6 @@ async function describeOp(env, fn, args, before) {
     case 'backupDone': return ['出力', 'バックアップ'];
     case 'backupClear': return ['復元', 'バックアップから復元 ' + String(args[0] || '')];
     case 'depAccounts': return ['変更', '入金照合の口座一覧'];
-    case 'ocrImage': return ['利用', '手書きの文字起こし'];
     default: return null;
   }
 }

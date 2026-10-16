@@ -1,4 +1,4 @@
-<!-- v2.12.0 (2026-10-16) -->
+<!-- v2.13.0 (2026-10-16) -->
 # 業務管理アプリ（Cloudflare版）公開の手順
 
 所要時間の目安: 30〜40分（初回のみ）。Macのターミナルで行います。
@@ -70,15 +70,6 @@ Cloudflare Access（Zero Trust）はカード登録が必要なため、この�
 > （Cloudflare Access を使う場合は、wrangler.toml の ACCESS_TEAM_DOMAIN / ACCESS_AUD を設定すれば、そちらが優先されます。）
 
 ※画面の表記は、Cloudflare側の更新で変わることがあります。
-
-## 6. 手書きメモの文字起こし（Gemini）を使う場合
-
-Google AI Studio（https://aistudio.google.com）でAPIキーを作り、次を実行します。キーはその場で貼り付けて入力します（どこにも書き残さないでください）。
-```
-npx wrangler secret put GEMINI_API_KEY
-```
-設定しないと、文字起こしのボタンは「設定がまだ行われていません」と案内します（その他の機能は使えます）。
-※Google版にあった「Googleの標準の文字認識」への切り替えは、この版にはありません。
 
 ## 7. データの入れ方
 

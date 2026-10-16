@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS "memos" (
   "projectId" TEXT,
   "memoDate" TEXT,
   "slipDone" TEXT,
-  "ordered" TEXT
+  "ordered" TEXT,
+  "photos" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS "vendors" (

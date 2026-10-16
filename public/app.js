@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.12.0  (2026-10-16)
+// 業務管理 河村図書教材社  v2.13.0  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1066,6 +1066,7 @@ function memoListHtml(){
     <div class="mute">${esc(c.name || '')} ${esc(m.who)}</div>
     <div class="mute">📅 ${esc(memoDay(m))}　<span class="badge" style="background:${m.slipDone === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">伝票入力 ${m.slipDone === '済' ? '済' : '未'}</span> <span class="badge" style="background:${m.ordered === '済' ? '#e6f4ea' : '#fde8e8'};color:#333">メーカー注文 ${m.ordered === '済' ? '済' : '未'}</span></div>
     <div class="mute">${esc(stampHtml(m))}</div>
+    ${m.photos ? `<div class="thumbs">${memoThumbs(m)}</div>` : ''}
     ${lines.length > 1 ? `<div style="white-space:pre-wrap;margin-top:4px;max-height:4.5em;overflow:hidden">${esc(lines.slice(1).join('\n'))}</div>` : ''}
     <div class="row" style="margin-top:6px" onclick="event.stopPropagation()">${m.status !== '完了' ? `<button onclick="markMemo('${m.id}','完了')">完了にする</button>` : ''}<button onclick="toggleMemo('${m.id}','slipDone')">${m.slipDone === '済' ? '伝票入力を未に戻す' : '伝票入力済にする'}</button><button onclick="toggleMemo('${m.id}','ordered')">${m.ordered === '済' ? 'メーカー注文を未に戻す' : 'メーカー注文済にする'}</button><button onclick="memoPrint('${m.id}')">🖨 印刷</button></div></div>`;
   }).join('') || '<p class="mute">メモはありません</p>';
@@ -1074,14 +1075,6 @@ async function markMemo(id, status){
   const m = DB.memos.find(x => x.id === id); if (!m) return;
   await run('save', 'memos', Object.assign({}, m, {status: status}));
   await reload0(); render();
-}
-async function ocrMemo(inp){
-  const f = inp.files[0]; inp.value = ''; if (!f) return;
-  const d = await resize(f, 2000);
-  const r = await run('ocrImage', d);
-  if (r.note) alert(r.note);
-  if (!r.text) return alert('文字を読み取れませんでした。明るい場所で、ノートを真上から大きく撮影してみてください。');
-  const ta = $('#f_body'); ta.value = ta.value ? ta.value + '\n' + r.text : r.text;
 }
 // ===== メモの印刷(A4縦・1件ずつ) =====
 function memoPrintHtml(m){
@@ -1109,6 +1102,41 @@ function memoPrintForm(){ // 編集中の内容(まだ保存していなくて�
   if (!String(o.body || '').trim()) return alert('内容が空です');
   viewDoc({html: memoPrintHtml(o)});
 }
+function memoThumbs(m){
+  return String(m.photos || '').split(',').filter(Boolean).map(t => t.endsWith('|pdf')
+    ? `<div class="pdf" onclick="event.stopPropagation();openPhoto('${m.id}','${t}','memo')">📄<br>PDF</div>`
+    : `<img loading="lazy" src="/api/file/${t}" alt="" onclick="event.stopPropagation();openPhoto('${m.id}','${t}','memo')">`).join('');
+}
+const MPEND = [];
+function memoPhotoBox(vals){
+  MPEND.length = 0;
+  return `<div style="margin-top:12px"><b>📎 写真・書類</b><div class="mute">Googleドライブに保存されます。写真を押すと拡大できます。</div>
+    <div class="thumbs" id="mphotos">${vals.id ? memoThumbs(vals) : ''}</div><div class="mute" id="mpend"></div>
+    <div class="row" style="margin-top:8px"><label class="fb">📷 撮影<input type="file" accept="image/*" capture="environment" style="display:none" onchange="memoAddFiles(this)"></label><label class="fb">🖼 写真・PDFを選択<input type="file" accept="image/*,application/pdf" multiple style="display:none" onchange="memoAddFiles(this)"></label></div></div>`;
+}
+async function memoUpload(id, f){
+  if (f.type === 'application/pdf') {
+    if (f.size > 8 * 1024 * 1024) { alert(f.name + ' は8MBを超えているため保存できません'); return; }
+    await run('uploadMemoPhoto', id, await readAsDataUrl(f), f.name);
+  } else await run('uploadMemoPhoto', id, await resize(f, 1600), 'memo_' + Date.now() + '.jpg');
+}
+async function memoAddFiles(inp){
+  const files = Array.from(inp.files); inp.value = ''; if (!files.length) return;
+  const id = view.cfg && view.cfg.vals && view.cfg.vals.id;
+  if (!id) { files.forEach(f => MPEND.push(f)); $('#mpend').textContent = MPEND.length + '枚の写真・書類を、保存と同時にGoogleドライブへ保存します'; return; }
+  for (const f of files) { try { await memoUpload(id, f); } catch (e) { /* run()で通知済み */ } }
+  await memoPhotosRefresh(id);
+}
+async function memoPhotosRefresh(id){
+  await reload0();
+  const m = DB.memos.find(x => x.id === id);
+  if (view.n === 'memos') return render();
+  const box = $('#mphotos'); if (box && m) box.innerHTML = memoThumbs(m);
+}
+async function memoUploadPending(id){
+  const fs = MPEND.splice(0);
+  for (const f of fs) { try { await memoUpload(id, f); } catch (e) { /* run()で通知済み */ } }
+}
 function memoKinds(cur){
   const k = (DB.memoKinds && DB.memoKinds.length ? DB.memoKinds : ['問い合わせ','注文','依頼','見積','集金','連絡事項','クレーム','その他']).slice();
   if (cur && !k.includes(cur)) k.push(cur);
@@ -1134,8 +1162,8 @@ function editMemo(id){
       {k:'ordered',l:'メーカーへの注文',t:'select',o:[['', '未'], ['済', '済']]},
       {k:'status',l:'対応状況',t:'select',o:['未対応','対応中','完了'].map(x => [x, x])},
       {k:'body',l:'内容（1行目が見出しになります）',t:'textarea',rows:9}],
-    extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + `<div class="row" style="margin-top:10px"><button onclick="memoPrintForm()">🖨 このメモを印刷</button></div>` + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + `<div class="row" style="margin-top:10px"><label class="fb">✍ 手書きを撮影して文字起こし<input type="file" accept="image/*" capture="environment" style="display:none" onchange="ocrMemo(this)"></label><label class="fb">🖼 写真から文字起こし<input type="file" accept="image/*" style="display:none" onchange="ocrMemo(this)"></label></div><div class="mute" style="margin-top:4px">文字起こしは内容の欄の末尾に追加されます。手書きは誤読があるため、数字・電話番号・名前は必ず確認してください。</div>`,
-    onDelete: !!id, afterDelete: () => go('memos'), after: () => go('memos')});
+    extra: (id && stampHtml(vals) ? `<div class="mute" style="margin-top:10px">${esc(stampHtml(vals))}</div>` : '') + `<div class="row" style="margin-top:10px"><button onclick="memoPrintForm()">🖨 このメモを印刷</button></div>` + (id ? `<div class="row" style="margin-top:10px">${vals.projectId ? `<button onclick="go('project',{id:'${vals.projectId}'})">📄 関連する案件を開く</button>` : `<button onclick="memoToProject('${id}')">📄 このメモから案件を作る</button>`}</div>` : '') + memoPhotoBox(vals),
+    onDelete: !!id, afterDelete: () => go('memos'), after: async (s) => { await memoUploadPending(s.id); await reload0(); go('memos'); }});
 }
 
 // ---------- 案件 ----------
@@ -1329,14 +1357,14 @@ async function showPdf(u8){
   }
 }
 function openOv(){ $('#ov').style.display = 'flex'; }
-async function openPhoto(reqId, tok){
+async function openPhoto(reqId, tok, kind){
   const isPdf = tok.endsWith('|pdf'), id = tok.split('|')[0];
   $('#ovimg').src = ''; $('#ovimg').style.display = isPdf ? 'none' : 'block';
   $('#pdfbox').style.display = 'none'; $('#pdfbox').innerHTML = '';
   $('#ovdl').textContent = 'PDFをダウンロード'; $('#ovdl').style.display = isPdf ? 'inline-block' : 'none';
   $('#ovdel').style.display = 'inline-block';
   openOv();
-  $('#ovdel').onclick = async () => { if (!confirm('削除しますか？')) return; closeOv(); await run('removePhoto', reqId, tok); await reload(); };
+  $('#ovdel').onclick = async () => { if (!confirm('削除しますか？')) return; closeOv(); if (kind === 'memo') { await run('removeMemoPhoto', reqId, tok); await memoPhotosRefresh(reqId); } else { await run('removePhoto', reqId, tok); await reload(); } };
   if (isPdf) {
     busy(1);
     try {
