@@ -2,7 +2,7 @@
   "name": "mitsumori-cf",
   "private": true,
   "type": "module",
-  "version": "2.14.2",
+  "version": "2.14.3",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

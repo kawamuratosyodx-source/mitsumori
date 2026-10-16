@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.14.2  (2026-10-16)
+// 業務管理 河村図書教材社  v2.14.3  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1037,13 +1037,15 @@ V.memos = () => {
   const panel = `<div class="card" id="mfp" style="display:${MOPT.fp ? 'block' : 'none'};margin-top:0"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${sels.map(x => `<div><label style="margin-top:0">${x[1]}</label><select style="width:100%" onchange="memoOpt('${x[0]}',this.value)">${x[2].map(o => `<option value="${esc(o[0])}" ${MOPT[x[0]] === o[0] ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`).join('')}</div><div class="row" style="margin-top:8px"><button onclick="memoFilterClear()">絞り込みを全部解除</button></div></div>`;
   return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button class="pri" onclick="editMemo()">＋メモ</button></div>
   <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()"></div>
-  <div class="bar"><select style="flex:1;min-width:0" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select><button id="mfb" onclick="memoFilterToggle()">${memoFilterLabel()}</button></div>
+  <div class="bar"><button id="mopen" class="${MOPT.ms === 'open' ? 'pri' : ''}" onclick="memoOpenOnly()" style="flex:1;white-space:nowrap">未完了のみ</button><button id="mfb" onclick="memoFilterToggle()" style="flex:1;white-space:nowrap">${memoFilterLabel()}</button></div>
+  <div class="bar"><select style="width:100%" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select></div>
   ${panel}
   <div id="mlist">${memoListHtml()}</div>`;
 };
 const MFKEYS = ['ms', 'kd', 'ar', 'sl', 'od'];
 function memoFilterLabel(){ const n = MFKEYS.filter(k => MOPT[k]).length; return '🔍 絞り込み' + (n ? '（' + n + '）' : ''); }
-function memoFilterBtn(){ const b = $('#mfb'); if (!b) return; const n = MFKEYS.filter(k => MOPT[k]).length; b.textContent = memoFilterLabel(); b.className = n ? 'pri' : ''; }
+function memoFilterBtn(){ const b = $('#mfb'); if (!b) return; const n = MFKEYS.filter(k => MOPT[k]).length; b.textContent = memoFilterLabel(); b.className = n ? 'pri' : ''; const o = $('#mopen'); if (o) o.className = MOPT.ms === 'open' ? 'pri' : ''; }
+function memoOpenOnly(){ MOPT.ms = MOPT.ms === 'open' ? '' : 'open'; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} render(); }
 function memoFilterToggle(){ MOPT.fp = !MOPT.fp; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mfp').style.display = MOPT.fp ? 'block' : 'none'; }
 function memoFilterClear(){ MFKEYS.forEach(k => { MOPT[k] = ''; }); try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} render(); }
 function stampHtml(o){
