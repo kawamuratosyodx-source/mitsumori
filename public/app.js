@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.14.1  (2026-10-16)
+// 業務管理 河村図書教材社  v2.14.2  (2026-10-16)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -1025,24 +1025,27 @@ function editVendor(id){
 
 // ---------- メモ帳 ----------
 // メモ一覧の絞り込み・並べ方(この端末で覚えておく)
-const MOPT = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('memoopt') || '{}') || {}; } catch (e) {} return {ms: o.ms || '', so: o.so || 'new', kd: o.kd || '', sl: o.sl || '', ar: o.ar || '', od: o.od || ''}; })();
-function memoOpt(k, v){ MOPT[k] = v; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mlist').innerHTML = memoListHtml(); }
+const MOPT = (() => { let o = {}; try { o = JSON.parse(localStorage.getItem('memoopt') || '{}') || {}; } catch (e) {} return {ms: o.ms || '', so: o.so || 'new', kd: o.kd || '', sl: o.sl || '', ar: o.ar || '', fp: !!o.fp, od: o.od || ''}; })();
+function memoOpt(k, v){ MOPT[k] = v; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mlist').innerHTML = memoListHtml(); memoFilterBtn(); }
 const memoOpen = m => m.status !== '完了';
 V.memos = () => {
   const cnt = f => DB.memos.filter(f).length;
   const fo = [['', 'すべて（' + DB.memos.length + '）'], ['open', '未完了（' + cnt(memoOpen) + '）'], ['完了', '完了（' + cnt(m => !memoOpen(m)) + '）'], ['未対応', '　未対応（' + cnt(m => m.status === '未対応') + '）'], ['対応中', '　対応中（' + cnt(m => m.status === '対応中') + '）']];
   const so = [['new', '新しい順'], ['kind', '種別順'], ['area', '背景色順（黄→水色→白）'], ['slip', '伝票入力が未を先に'], ['ord', 'メーカー注文が未を先に'], ['open', '未完了を先に'], ['done', '完了を先に']];
   const kl = memoKindsAll(), kopt = [['', 'すべての種別']].concat(kl.map(k => [k, k + '（' + cnt(m => m.kind === k) + '）']));
+  const sels = [['ms','状態',fo],['kd','種別',kopt],['ar','背景色',[['', 'すべて'], ['0', '黄（豊川市・新城市）'], ['1', '水色（豊橋市・田原市）'], ['2', '白（その他）']]],['sl','伝票入力',[['', 'すべて'], ['no', '未'], ['yes', '済']]],['od','メーカー注文',[['', 'すべて'], ['no', '未'], ['yes', '済']]]];
+  const panel = `<div class="card" id="mfp" style="display:${MOPT.fp ? 'block' : 'none'};margin-top:0"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${sels.map(x => `<div><label style="margin-top:0">${x[1]}</label><select style="width:100%" onchange="memoOpt('${x[0]}',this.value)">${x[2].map(o => `<option value="${esc(o[0])}" ${MOPT[x[0]] === o[0] ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`).join('')}</div><div class="row" style="margin-top:8px"><button onclick="memoFilterClear()">絞り込みを全部解除</button></div></div>`;
   return `<div class="bar"><button onclick="go('menu')">← メニュー</button><span class="sp"></span><button class="pri" onclick="editMemo()">＋メモ</button></div>
   <div class="bar"><input placeholder="メモを検索（内容・顧客・相手先）" value="${esc(view.mq || '')}" oninput="view.mq=this.value;$('#mlist').innerHTML=memoListHtml()"></div>
-  <div class="bar"><select style="width:auto" onchange="memoOpt('ms',this.value)">${fo.map(o => `<option value="${o[0]}" ${MOPT.ms === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
-  <select style="width:auto" onchange="memoOpt('kd',this.value)">${kopt.map(o => `<option value="${esc(o[0])}" ${MOPT.kd === o[0] ? 'selected' : ''}>${o[0] === '' ? '種別: ' : ''}${esc(o[1])}</option>`).join('')}</select>
-  <select style="width:auto" onchange="memoOpt('ar',this.value)">${[['', '背景色: すべて'], ['0', '背景色: 黄（豊川市・新城市）'], ['1', '背景色: 水色（豊橋市・田原市）'], ['2', '背景色: 白（その他）']].map(o => `<option value="${o[0]}" ${MOPT.ar === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
-  <select style="width:auto" onchange="memoOpt('sl',this.value)">${[['', '伝票入力: すべて'], ['no', '伝票入力: 未'], ['yes', '伝票入力: 済']].map(o => `<option value="${o[0]}" ${MOPT.sl === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
-  <select style="width:auto" onchange="memoOpt('od',this.value)">${[['', 'メーカー注文: すべて'], ['no', 'メーカー注文: 未'], ['yes', 'メーカー注文: 済']].map(o => `<option value="${o[0]}" ${MOPT.od === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
-  <select style="width:auto" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select></div>
+  <div class="bar"><select style="flex:1;min-width:0" onchange="memoOpt('so',this.value)">${so.map(o => `<option value="${o[0]}" ${MOPT.so === o[0] ? 'selected' : ''}>並べ方: ${o[1]}</option>`).join('')}</select><button id="mfb" onclick="memoFilterToggle()">${memoFilterLabel()}</button></div>
+  ${panel}
   <div id="mlist">${memoListHtml()}</div>`;
 };
+const MFKEYS = ['ms', 'kd', 'ar', 'sl', 'od'];
+function memoFilterLabel(){ const n = MFKEYS.filter(k => MOPT[k]).length; return '🔍 絞り込み' + (n ? '（' + n + '）' : ''); }
+function memoFilterBtn(){ const b = $('#mfb'); if (!b) return; const n = MFKEYS.filter(k => MOPT[k]).length; b.textContent = memoFilterLabel(); b.className = n ? 'pri' : ''; }
+function memoFilterToggle(){ MOPT.fp = !MOPT.fp; try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} $('#mfp').style.display = MOPT.fp ? 'block' : 'none'; }
+function memoFilterClear(){ MFKEYS.forEach(k => { MOPT[k] = ''; }); try { localStorage.setItem('memoopt', JSON.stringify(MOPT)); } catch (e) {} render(); }
 function stampHtml(o){
   if (!o) return '';
   const c = String(o.created || '').slice(0, 16), u = String(o.updated || '').slice(0, 16);
