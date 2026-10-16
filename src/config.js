@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
+// 業務管理 河村図書教材社  v2.12.0  (2026-10-16)
 // 自社情報・テーブル定義(ここを書き換えると反映されます)
 export const CONFIG = {
   company: {
@@ -32,7 +32,7 @@ export const TABLES = {
   quotes: ['id', 'no', 'projectId', 'issueDate', 'validUntil', 'subject', 'note', 'subtotal', 'tax', 'total', 'taxRate', 'author', 'created', 'updated', 'result', 'resultOn', 'shipping'],
   lines: ['quoteId', 'row', 'item', 'qty', 'unit', 'price', 'amount', 'note', 'cost'],
   requests: ['id', 'projectId', 'vendor', 'requestedOn', 'dueOn', 'answeredOn', 'amount', 'status', 'memo', 'photos', 'author', 'created', 'detail'],
-  memos: ['id', 'customerId', 'who', 'kind', 'body', 'status', 'author', 'created', 'updated', 'projectId'],
+  memos: ['id', 'customerId', 'who', 'kind', 'body', 'status', 'author', 'created', 'updated', 'projectId', 'memoDate', 'slipDone', 'ordered'],
   vendors: ['id', 'name', 'contact', 'tel', 'email', 'address', 'memo', 'created'],
 };
 // 数値として返す列(空は空文字)

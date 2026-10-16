@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.11.0  (2026-10-15)
+// 業務管理 河村図書教材社  v2.12.0  (2026-10-16)
 import { CONFIG, TABLES, NUMERIC } from './config.js';
 import { verifyAccess, login, getSecurity, checkAdmin, checkCommon, hashPw, ADMIN_NAME } from './auth.js';
 import { quoteHtml, requestHtml } from './pdf.js';
@@ -29,6 +29,15 @@ async function getCompany(env) {
     if (r && r.value) { const v = JSON.parse(r.value); for (const k of Object.keys(base)) if (v[k] != null) base[k] = String(v[k]); }
   } catch (e) { /* 表がまだ無い場合は初期値 */ }
   return base;
+}
+
+const DEFAULT_KINDS = ['問い合わせ', '注文', '依頼', '見積', '集金', '連絡事項', 'クレーム', 'その他'];
+async function getMemoKinds(env) {
+  try {
+    const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'memokinds'").first();
+    if (r && r.value) { const v = JSON.parse(r.value); if (Array.isArray(v) && v.length) return v.map(String); }
+  } catch (e) { /* 初期値 */ }
+  return DEFAULT_KINDS.slice();
 }
 
 // ===== D1の読み書き =====
@@ -107,6 +116,7 @@ const API = {
     const o = {};
     o.me = { name: ctx.email, admin: !!ctx.admin };
     o.company = await getCompany(env);
+    o.memoKinds = await getMemoKinds(env);
     o.dv = dv;
     o.part = !!h;
     for (const k of Object.keys(TABLES)) if (need(k)) o[k] = await readAll(env, k);
@@ -217,6 +227,16 @@ const API = {
     return true; // 全員のログインが切れる(新しい合言葉で入り直す)
   },
   async getCompany(env) { return getCompany(env); },
+  // メモの種別の一覧(だれでも変更できる)
+  async saveMemoKinds(env, ctx, list) {
+    const out = [];
+    for (const x of Array.isArray(list) ? list : []) { const t = String(x == null ? '' : x).trim().slice(0, 20); if (t && !out.includes(t)) out.push(t); }
+    if (!out.length) throw fail('種別を1つ以上入力してください');
+    if (out.length > 30) throw fail('種別は30個までです');
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS "settings" ("key" TEXT PRIMARY KEY, "value" TEXT)').run();
+    await env.DB.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('memokinds', JSON.stringify(out)).run();
+    return out;
+  },
   async saveCompany(env, ctx, obj) {
     if (!ctx.admin) throw fail('会社情報を変更できるのは管理者だけです');
     const out = {};
@@ -238,7 +258,7 @@ const API = {
       const cur = (await readAll(env, 'requests', '"id" = ?', obj.id))[0];
       obj.photos = cur ? cur.photos : '';
     }
-    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); }
+    if (key === 'memos') { if (!obj.author) obj.author = ctx.email; obj.updated = nowStr(); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(obj.memoDate || ''))) obj.memoDate = String(obj.created).slice(0, 10); obj.slipDone = obj.slipDone === '済' ? '済' : ''; obj.ordered = obj.ordered === '済' ? '済' : ''; }
     await env.DB.batch([upsertStmt(env, key, obj), bumpStmt(env, key)]);
     return obj;
   },
@@ -695,7 +715,7 @@ const API = {
     const out = {};
     for (const t of Object.keys(BK)) {
       if (t === 'sales_rows') { const c = await env.DB.prepare('SELECT COALESCE(SUM(CAST("count" AS INTEGER)),0) AS n FROM sales_batches').first(); out[t] = Number(c && c.n) || 0; continue; }
-      const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM "' + t + '"' + (t === 'settings' ? " WHERE key IN ('company','depaccts')" : '')).first();
+      const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM "' + t + '"' + (t === 'settings' ? " WHERE key IN ('company','depaccts','memokinds')" : '')).first();
       out[t] = c.n;
     }
     const last = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lastbackup'").first();
@@ -708,7 +728,7 @@ const API = {
     if (!BK[table]) throw fail('対象外の表です');
     await ensureDep(env);
     const cols = BK[table], off = Math.max(0, Number(offset) || 0), LIM = table === 'sales_rows' ? 800 : 2000;
-    const where = table === 'settings' ? " WHERE key IN ('company','depaccts')" : '';
+    const where = table === 'settings' ? " WHERE key IN ('company','depaccts','memokinds')" : '';
     const r = await env.DB.prepare('SELECT ' + cols.map(c => '"' + c + '"').join(',') + ' FROM "' + table + '"' + where + ' ORDER BY rowid LIMIT ' + (LIM + 1) + ' OFFSET ' + off).all();
     const rows = (r.results || []).map(o => cols.map(c => o[c]));
     return { cols: cols, rows: rows.slice(0, LIM), more: rows.length > LIM, next: off + LIM };
@@ -724,7 +744,7 @@ const API = {
     if (!BK[table]) throw fail('対象外の表です');
     await ensureDep(env);
     await env.DB.prepare("DELETE FROM settings WHERE key = 'depmeta'").run();
-    if (table === 'settings') await env.DB.prepare("DELETE FROM settings WHERE key IN ('company','depaccts')").run();
+    if (table === 'settings') await env.DB.prepare("DELETE FROM settings WHERE key IN ('company','depaccts','memokinds')").run();
     else await env.DB.prepare('DELETE FROM "' + table + '"').run();
     return true;
   },
@@ -737,7 +757,7 @@ const API = {
     const st = [];
     for (const r of rows) {
       if (!Array.isArray(r) || r.length !== cols.length) throw fail('バックアップのデータが壊れています（' + table + '）');
-      if (table === 'settings' && !['company', 'depaccts'].includes(r[0])) continue;
+      if (table === 'settings' && !['company', 'depaccts', 'memokinds'].includes(r[0])) continue;
       st.push(env.DB.prepare(sql).bind(...r.map(v => (v === undefined ? null : typeof v === 'object' && v !== null ? JSON.stringify(v) : v))));
     }
     for (let i = 0; i < st.length; i += 50) await env.DB.batch(st.slice(i, i + 50));
@@ -947,7 +967,7 @@ const BUMPMAP = {
   importCustomers: () => ['customers'],
 };
 // 表が変わらない操作(読み取りだけ、または別の置き場所を使うもの)
-const NOBUMP = new Set(['getAll', 'getStorage', 'listFiles', 'driveStatus', 'driveTest', 'getLogs', 'getCompany', 'saveCompany',
+const NOBUMP = new Set(['getAll', 'getStorage', 'listFiles', 'driveStatus', 'driveTest', 'getLogs', 'getCompany', 'saveCompany', 'saveMemoKinds',
   'changePassword', 'getQuoteBundle', 'makePdf', 'makeRequestPdf', 'makeCsv', 'ocrImage',
   'salesBatches', 'salesBegin', 'salesAdd', 'salesFinish', 'salesDelete', 'salesSearch', 'salesTax',
   'depMonths', 'depMonth', 'depDay', 'depSet', 'depNote', 'depImportBegin', 'depImportAdd', 'depImportCells', 'depAccounts',

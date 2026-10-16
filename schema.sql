@@ -77,7 +77,10 @@ CREATE TABLE IF NOT EXISTS "memos" (
   "author" TEXT,
   "created" TEXT,
   "updated" TEXT,
-  "projectId" TEXT
+  "projectId" TEXT,
+  "memoDate" TEXT,
+  "slipDone" TEXT,
+  "ordered" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS "vendors" (
