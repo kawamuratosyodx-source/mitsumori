@@ -15,6 +15,9 @@ let h = rd('public/index.html');
 h = h.replace(/<span class="ver">[^<]*<\/span>/, '<span class="ver">v' + ver + '</span>').replace(/<script src="\/app\.js[^"]*" defer>/, '<script src="/app.js?v=' + ver + '" defer>');
 wr('public/index.html', h);
 
+let a = rd('public/app.js').replace(/^const APPVER = '[^']*';/m, "const APPVER = '" + ver + "';");
+wr('public/app.js', a);
+
 // 各ファイルの先頭にバージョンの印を付ける(何度実行しても1行だけ)
 const stamp = '// 業務管理 河村図書教材社  v' + ver + '  (' + date + ')\n';
 for (const f of ['public/app.js', 'src/index.js', 'src/auth.js', 'src/pdf.js', 'src/config.js']) {

@@ -1,4 +1,4 @@
-// 業務管理 河村図書教材社  v2.14.3  (2026-10-16)
+// 業務管理 河村図書教材社  v2.14.4  (2026-10-26)
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen = n => Number(n || 0).toLocaleString('ja-JP');
@@ -70,6 +70,27 @@ async function doLogout(){
 // 通常のクリックはアプリ内で切り替え、Ctrl/⌘/Shift+クリックや中クリックはブラウザの新しいタブで開く
 function tbGo(e, n){ if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return true; go(n); return false; }
 const V = {};
+// ----- 新しい版への自動切り替え -----
+// iPad・iPhoneのホーム画面から開いたアプリは、閉じずに置いておくと、古い画面のまま残る。
+// 開き直したとき・「更新」を押したときに、サーバーの版と比べて、違えば新しい画面を読み込み直す
+const APPVER = '2.14.4';
+async function checkVer(){
+  try {
+    const r = await fetch('/version.json?t=' + Date.now(), {cache: 'no-store'}); const j = await r.json();
+    if (!j.version || j.version === APPVER) return false;
+    let t = ''; try { t = sessionStorage.getItem('verTry') || ''; } catch (e) {}
+    if (t !== j.version) {   // 1回だけ、新しい画面を読み込み直す(うまくいかないときに繰り返さないため)
+      try { sessionStorage.setItem('verTry', j.version); } catch (e) {}
+      location.replace('/?r=' + encodeURIComponent(j.version) + location.hash); return true;
+    }
+    if (!$('#stale')) { const d = document.createElement('div'); d.id = 'stale'; d.style.cssText = 'background:#fde8e8;color:#7a1c1c;padding:8px 12px;font-size:13px'; d.textContent = '新しい版（v' + j.version + '）があります。このアプリをいったん閉じて（画面を上へスワイプして終了）、開き直してください。'; const m = $('#app'); m.parentNode.insertBefore(d, m); }
+  } catch (e) { /* 通信できないときは、そのまま使う */ }
+  return false;
+}
+async function reloadApp(){ if (await checkVer()) return; reload(); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVer(); });
+window.addEventListener('pageshow', e => { if (e.persisted) checkVer(); });
+setTimeout(checkVer, 1500);
 async function reload(){
   try { DB = await run('getAll'); AUTH = true; render(); }
   catch (e) { if (e && e.silent) return; $('#app').innerHTML = '<div class="card"><b>データの読み込みに失敗しました</b><div class="mute" style="margin:8px 0;white-space:pre-wrap">' + esc((e && e.message) || e) + '</div><button onclick="reload()">再読み込み</button></div>'; }
